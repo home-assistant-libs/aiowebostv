@@ -1,5 +1,5 @@
 -r requirements.txt
-wheel
-pre-commit
+wheel==0.37.1
+pre-commit==2.16.0
 
 -e .
