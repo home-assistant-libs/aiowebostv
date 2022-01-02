@@ -1,17 +1,17 @@
 """Exceptions for aiowebostv."""
 
 
-class PyLGTVPairException(Exception):
+class WebOsTvPairException(Exception):
     """Exception raised to represent TV pairing errors."""
 
 
-class PyLGTVCmdException(Exception):
+class WebOsTvCmdException(Exception):
     """Exception raised to represent TV command exceptions."""
 
 
-class PyLGTVCmdError(PyLGTVCmdException):
+class WebOsTvCmdError(WebOsTvCmdException):
     """Exception raised to represent TV command errors."""
 
 
-class PyLGTVServiceNotFoundError(PyLGTVCmdError):
+class WebOsTvServiceNotFoundError(WebOsTvCmdError):
     """Exception raised to represent TV service not found error."""

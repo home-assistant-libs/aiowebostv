@@ -1,5 +1,5 @@
 """Provide a package for controlling LG webOS based TVs."""
-from .exceptions import PyLGTVCmdException, PyLGTVPairException
+from .exceptions import WebOsTvCmdException, WebOsTvPairException
 from .webos_client import WebOsClient
 
-__all__ = ["PyLGTVCmdException", "PyLGTVPairException", "WebOsClient"]
+__all__ = ["WebOsTvCmdException", "WebOsTvPairException", "WebOsClient"]
