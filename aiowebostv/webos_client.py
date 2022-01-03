@@ -57,11 +57,12 @@ class WebOsClient:
         self.do_state_update = False
         self._volume_step_lock = asyncio.Lock()
         self._volume_step_delay = None
+        self._loop = asyncio.get_running_loop()
 
     async def connect(self):
         """Connect to webOS TV device."""
         if not self.is_connected():
-            self.connect_result = asyncio.Future()
+            self.connect_result = self._loop.create_future()
             self.connect_task = asyncio.create_task(
                 self.connect_handler(self.connect_result)
             )
@@ -594,7 +595,7 @@ class WebOsClient:
         if uid is None:
             uid = self.command_count
             self.command_count += 1
-        res = asyncio.Future()
+        res = self._loop.create_future()
         self.futures[uid] = res
         try:
             await self.command(cmd_type, uri, payload, uid)
