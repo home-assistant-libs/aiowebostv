@@ -4,7 +4,7 @@ from contextlib import suppress
 from datetime import datetime
 
 from aiowebostv import WebOsClient
-from aiowebostv.exceptions import WebOsTvCmdException
+from aiowebostv.exceptions import WebOsTvCommandError
 from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
 
 WEBOSTV_EXCEPTIONS = (
@@ -12,7 +12,7 @@ WEBOSTV_EXCEPTIONS = (
     ConnectionClosed,
     ConnectionClosedOK,
     ConnectionRefusedError,
-    WebOsTvCmdException,
+    WebOsTvCommandError,
     asyncio.TimeoutError,
     asyncio.CancelledError,
 )

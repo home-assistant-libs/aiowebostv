@@ -10,9 +10,9 @@ import websockets
 
 from . import endpoints as ep
 from .exceptions import (
-    WebOsTvCmdError,
-    WebOsTvCmdException,
-    WebOsTvPairException,
+    WebOsTvCommandError,
+    WebOsTvPairError,
+    WebOsTvResponseTypeError,
     WebOsTvServiceNotFoundError,
 )
 from .handshake import REGISTRATION_MESSAGE
@@ -114,7 +114,7 @@ class WebOsClient:
             if response["type"] == "hello":
                 self._hello_info = response["payload"]
             else:
-                raise WebOsTvCmdException(f"Invalid request type {response}")
+                raise WebOsTvCommandError(f"Invalid request type {response}")
 
             # send registration
             await main_ws.send(json.dumps(self.registration_msg()))
@@ -131,7 +131,7 @@ class WebOsClient:
                     self.client_key = response["payload"]["client-key"]
 
             if not self.client_key:
-                raise WebOsTvPairException("Unable to pair")
+                raise WebOsTvPairError("Unable to pair")
 
             self.callbacks = {}
             self.futures = {}
@@ -476,13 +476,13 @@ class WebOsClient:
         if self._channels is None:
             try:
                 await self.subscribe_channels(self.set_channels_state)
-            except WebOsTvCmdException:
+            except WebOsTvCommandError:
                 pass
 
         if app_id == "com.webos.app.livetv" and self._current_channel is None:
             try:
                 await self.subscribe_current_channel(self.set_current_channel_state)
-            except WebOsTvCmdException:
+            except WebOsTvCommandError:
                 pass
 
         if self.state_update_callbacks and self.do_state_update:
@@ -519,7 +519,7 @@ class WebOsClient:
         if self._channel_info is None:
             try:
                 await self.subscribe_channel_info(self.set_channel_info_state)
-            except WebOsTvCmdException:
+            except WebOsTvCommandError:
                 pass
 
         if self.state_update_callbacks and self.do_state_update:
@@ -585,7 +585,7 @@ class WebOsClient:
         }
 
         if self.connection is None:
-            raise WebOsTvCmdException("Not connected, can't execute command.")
+            raise WebOsTvCommandError("Not connected, can't execute command.")
 
         await self.connection.send(json.dumps(message))
 
@@ -598,7 +598,7 @@ class WebOsClient:
         self.futures[uid] = res
         try:
             await self.command(cmd_type, uri, payload, uid)
-        except (asyncio.CancelledError, WebOsTvCmdException):
+        except (asyncio.CancelledError, WebOsTvCommandError):
             del self.futures[uid]
             raise
         try:
@@ -611,7 +611,7 @@ class WebOsClient:
 
         payload = response.get("payload")
         if payload is None:
-            raise WebOsTvCmdException(f"Invalid request response {response}")
+            raise WebOsTvCommandError(f"Invalid request response {response}")
 
         return_value = payload.get("returnValue") or payload.get("subscribed")
 
@@ -619,11 +619,11 @@ class WebOsClient:
             error = response.get("error")
             if error == "404 no such service or method":
                 raise WebOsTvServiceNotFoundError(error)
-            raise WebOsTvCmdError(response)
+            raise WebOsTvResponseTypeError(response)
         if return_value is None:
-            raise WebOsTvCmdException(f"Invalid request response {response}")
+            raise WebOsTvCommandError(f"Invalid request response {response}")
         if not return_value:
-            raise WebOsTvCmdException(f"Request failed with response {response}")
+            raise WebOsTvCommandError(f"Request failed with response {response}")
 
         return payload
 
@@ -643,7 +643,7 @@ class WebOsClient:
     async def input_command(self, message):
         """Execute TV input command."""
         if self.input_connection is None:
-            raise WebOsTvCmdException("Couldn't execute input command.")
+            raise WebOsTvCommandError("Couldn't execute input command.")
 
         await self.input_connection.send(message)
 

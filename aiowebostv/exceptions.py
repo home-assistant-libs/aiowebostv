@@ -1,17 +1,21 @@
 """Exceptions for aiowebostv."""
 
 
-class WebOsTvPairException(Exception):
-    """Exception raised to represent TV pairing errors."""
+class WebOsTvError(Exception):
+    """Base exception for aiowebostv."""
 
 
-class WebOsTvCmdException(Exception):
-    """Exception raised to represent TV command exceptions."""
+class WebOsTvPairError(WebOsTvError):
+    """Represent TV pairing errors."""
 
 
-class WebOsTvCmdError(WebOsTvCmdException):
-    """Exception raised to represent TV command errors."""
+class WebOsTvCommandError(WebOsTvError):
+    """Represent TV command errors."""
 
 
-class WebOsTvServiceNotFoundError(WebOsTvCmdError):
-    """Exception raised to represent TV service not found error."""
+class WebOsTvResponseTypeError(WebOsTvCommandError):
+    """Represent TV responded with error type."""
+
+
+class WebOsTvServiceNotFoundError(WebOsTvResponseTypeError):
+    """Represent TV service not found error."""
