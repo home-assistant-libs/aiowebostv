@@ -23,9 +23,5 @@ disable=
 [REPORTS]
 score=no
 
-[TYPECHECK]
-# For attrs
-ignored-classes=_CountingAttr
-
 [FORMAT]
 expected-line-ending-format=LF

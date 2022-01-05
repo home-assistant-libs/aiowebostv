@@ -92,7 +92,7 @@ class WebOsClient:
         return handshake
 
     async def connect_handler(self, res):
-        """Connect handler for webOS TV."""
+        """Handle connection for webOS TV."""
         # pylint: disable=too-many-locals,too-many-statements
         handler_tasks = set()
         main_ws = None
@@ -469,10 +469,13 @@ class WebOsClient:
             await self.do_state_update_callbacks()
 
     async def set_current_app_state(self, app_id):
-        """Set current app state variable."""
-        # This function also handles subscriptions to current channel and channel list,
-        # since the current channel subscription can only succeed when Live TV is running,
-        # and the channel list subscription can only succeed after channels have been configured.
+        """Set current app state variable.
+
+        This function also handles subscriptions to current channel and
+        channel list, since the current channel subscription can only
+        succeed when Live TV is running and channel list subscription
+        can only succeed after channels have been configured.
+        """
         self._current_app_id = app_id
 
         if self._channels is None:
@@ -512,9 +515,12 @@ class WebOsClient:
             await self.do_state_update_callbacks()
 
     async def set_current_channel_state(self, channel):
-        """Set current channel state variable."""
-        # This function also handles the channel info subscription,
-        # since that call may fail if channel information is not available when it's called."""
+        """Set current channel state variable.
+
+        This function also handles the channel info subscription,
+        since that call may fail if channel information is not
+        available when it's called.
+        """
         self._current_channel = channel
 
         if self._channel_info is None:
@@ -756,8 +762,10 @@ class WebOsClient:
         return await self.request(ep.GET_SYSTEM_INFO)
 
     async def power_off(self):
-        """Power off TV."""
-        # protect against turning tv back on if it is off
+        """Power off TV.
+
+        Protect against turning tv back on if it is off.
+        """
         if not self.is_on:
             return
 
@@ -867,8 +875,11 @@ class WebOsClient:
         return await self._volume_step(ep.VOLUME_DOWN)
 
     async def _volume_step(self, endpoint):
-        """Volume step and conditionally sleep afterwards."""
-        # if a consecutive volume step shouldn't be possible to perform immediately after.
+        """Set volume with step delay.
+
+        Set volume and conditionally sleep if a consecutive volume step
+        shouldn't be possible to perform immediately after.
+        """
         if (
             self.sound_output in SOUND_OUTPUTS_TO_DELAY_CONSECUTIVE_VOLUME_STEPS
             and self._volume_step_delay is not None
