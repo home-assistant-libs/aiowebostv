@@ -1,5 +1,7 @@
 -r requirements.txt
-wheel==0.37.1
+-r requirements_lint.txt
 pre-commit==2.16.0
+tox==3.24.5
+wheel==0.37.1
 
 -e .

@@ -82,7 +82,7 @@ class WebOsClient:
         return self.client_key is not None
 
     def is_connected(self):
-        """Connected to the tv."""
+        """Return true if connected to the tv."""
         return self.connect_task is not None and not self.connect_task.done()
 
     def registration_msg(self):
@@ -92,13 +92,14 @@ class WebOsClient:
         return handshake
 
     async def connect_handler(self, res):
-        """webOS TV Connection handler."""
+        """Handle connection for webOS TV."""
+        # pylint: disable=too-many-locals,too-many-statements
         handler_tasks = set()
         main_ws = None
         input_ws = None
         try:
             main_ws = await asyncio.wait_for(
-                websockets.connect(
+                websockets.client.connect(
                     f"ws://{self.host}:{self.port}",
                     ping_interval=None,
                     close_timeout=self.timeout_connect,
@@ -158,7 +159,7 @@ class WebOsClient:
             sockres = await self.request(ep.INPUT_SOCKET)
             inputsockpath = sockres.get("socketPath")
             input_ws = await asyncio.wait_for(
-                websockets.connect(
+                websockets.client.connect(
                     inputsockpath,
                     ping_interval=None,
                     close_timeout=self.timeout_connect,
@@ -213,7 +214,7 @@ class WebOsClient:
 
             await asyncio.wait(handler_tasks, return_when=asyncio.FIRST_COMPLETED)
 
-        except Exception as ex:
+        except Exception as ex:  # pylint: disable=broad-except
             if not res.done():
                 res.set_exception(ex)
         finally:
@@ -284,7 +285,7 @@ class WebOsClient:
 
     @staticmethod
     async def callback_handler(queue, callback, future):
-        """Callback handler."""
+        """Handle callbacks."""
         try:
             while True:
                 msg = await queue.get()
@@ -469,9 +470,12 @@ class WebOsClient:
 
     async def set_current_app_state(self, app_id):
         """Set current app state variable.
-        This function also handles subscriptions to current channel and channel list,
-        since the current channel subscription can only succeed when Live TV is running,
-        and the channel list subscription can only succeed after channels have been configured."""
+
+        This function also handles subscriptions to current channel and
+        channel list, since the current channel subscription can only
+        succeed when Live TV is running and channel list subscription
+        can only succeed after channels have been configured.
+        """
         self._current_app_id = app_id
 
         if self._channels is None:
@@ -512,9 +516,11 @@ class WebOsClient:
 
     async def set_current_channel_state(self, channel):
         """Set current channel state variable.
-        This function also handles the channel info subscription,
-        since that call may fail if channel information is not available when it's called."""
 
+        This function also handles the channel info subscription,
+        since that call may fail if channel information is not
+        available when it's called.
+        """
         self._current_channel = channel
 
         if self._channel_info is None:
@@ -652,25 +658,21 @@ class WebOsClient:
 
     async def button(self, name):
         """Send button press command."""
-
         message = f"type:button\nname:{name}\n\n"
         await self.input_command(message)
 
     async def move(self, d_x, d_y, down=0):
         """Send cursor move command."""
-
         message = f"type:move\ndx:{d_x}\ndy:{d_y}\ndown:{down}\n\n"
         await self.input_command(message)
 
     async def click(self):
         """Send cursor click command."""
-
         message = "type:click\n\n"
         await self.input_command(message)
 
     async def scroll(self, d_x, d_y):
         """Send scroll command."""
-
         message = f"type:scroll\ndx:{d_x}\ndy:{d_y}\n\n"
         await self.input_command(message)
 
@@ -760,9 +762,10 @@ class WebOsClient:
         return await self.request(ep.GET_SYSTEM_INFO)
 
     async def power_off(self):
-        """Power off TV."""
+        """Power off TV.
 
-        # protect against turning tv back on if it is off
+        Protect against turning tv back on if it is off.
+        """
         if not self.is_on:
             return
 
@@ -775,9 +778,7 @@ class WebOsClient:
         return await self.request(ep.POWER_ON)
 
     async def turn_screen_off(self, webos_ver=""):
-        """Turn TV Screen off. standbyMode values: 'active' or 'passive',
-        passive cannot turn screen back on, need to pull TV plug.
-        """
+        """Turn TV Screen off."""
         ep_name = f"TURN_OFF_SCREEN_WO{webos_ver}" if webos_ver else "TURN_OFF_SCREEN"
 
         if not hasattr(ep, ep_name):
@@ -786,9 +787,7 @@ class WebOsClient:
         return await self.request(getattr(ep, ep_name), {"standbyMode": "active"})
 
     async def turn_screen_on(self, webos_ver=""):
-        """Turn TV Screen on. standbyMode values: 'active' or 'passive',
-        passive cannot turn screen back on, need to pull TV plug.
-        """
+        """Turn TV Screen on."""
         ep_name = f"TURN_ON_SCREEN_WO{webos_ver}" if webos_ver else "TURN_ON_SCREEN"
 
         if not hasattr(ep, ep_name):
@@ -829,7 +828,7 @@ class WebOsClient:
 
     # Audio
     async def get_audio_status(self):
-        """Get the current audio status"""
+        """Get the current audio status."""
         return await self.request(ep.GET_AUDIO_STATUS)
 
     async def get_muted(self):
@@ -876,8 +875,11 @@ class WebOsClient:
         return await self._volume_step(ep.VOLUME_DOWN)
 
     async def _volume_step(self, endpoint):
-        """Volume step and conditionally sleep afterwards
-        if a consecutive volume step shouldn't be possible to perform immediately after."""
+        """Set volume with step delay.
+
+        Set volume and conditionally sleep if a consecutive volume step
+        shouldn't be possible to perform immediately after.
+        """
         if (
             self.sound_output in SOUND_OUTPUTS_TO_DELAY_CONSECUTIVE_VOLUME_STEPS
             and self._volume_step_delay is not None
