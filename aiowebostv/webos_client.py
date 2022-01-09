@@ -7,6 +7,7 @@ import os
 from datetime import timedelta
 
 import websockets
+from websockets.client import connect as ws_connect
 
 from . import endpoints as ep
 from .exceptions import (
@@ -99,7 +100,7 @@ class WebOsClient:
         input_ws = None
         try:
             main_ws = await asyncio.wait_for(
-                websockets.client.connect(
+                ws_connect(
                     f"ws://{self.host}:{self.port}",
                     ping_interval=None,
                     close_timeout=self.timeout_connect,
@@ -159,7 +160,7 @@ class WebOsClient:
             sockres = await self.request(ep.INPUT_SOCKET)
             inputsockpath = sockres.get("socketPath")
             input_ws = await asyncio.wait_for(
-                websockets.client.connect(
+                ws_connect(
                     inputsockpath,
                     ping_interval=None,
                     close_timeout=self.timeout_connect,
