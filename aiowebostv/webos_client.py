@@ -25,7 +25,7 @@ class WebOsClient:
     """webOS TV client class."""
 
     def __init__(
-        self, host, client_key=None, timeout_connect=2, ping_interval=1, ping_timeout=20
+        self, host, client_key=None, timeout_connect=2, ping_interval=5, ping_timeout=20
     ):
         """Initialize the client."""
         self.host = host
@@ -102,7 +102,8 @@ class WebOsClient:
             main_ws = await asyncio.wait_for(
                 ws_connect(
                     f"ws://{self.host}:{self.port}",
-                    ping_interval=None,
+                    ping_interval=self.ping_interval,
+                    ping_timeout=self.ping_timeout,
                     close_timeout=self.timeout_connect,
                     max_size=None,
                 ),
@@ -144,14 +145,6 @@ class WebOsClient:
                     self.consumer_handler(main_ws, self.callbacks, self.futures)
                 )
             )
-            if self.ping_interval is not None:
-                handler_tasks.add(
-                    asyncio.create_task(
-                        self.ping_handler(
-                            main_ws, self.ping_interval, self.ping_timeout
-                        )
-                    )
-                )
             self.connection = main_ws
 
             # open additional connection needed to send button commands
@@ -162,21 +155,14 @@ class WebOsClient:
             input_ws = await asyncio.wait_for(
                 ws_connect(
                     inputsockpath,
-                    ping_interval=None,
+                    ping_interval=self.ping_interval,
+                    ping_timeout=self.ping_timeout,
                     close_timeout=self.timeout_connect,
                 ),
                 timeout=self.timeout_connect,
             )
 
             handler_tasks.add(asyncio.create_task(input_ws.wait_closed()))
-            if self.ping_interval is not None:
-                handler_tasks.add(
-                    asyncio.create_task(
-                        self.ping_handler(
-                            input_ws, self.ping_interval, self.ping_timeout
-                        )
-                    )
-                )
             self.input_connection = input_ws
 
             # set static state and subscribe to state updates
