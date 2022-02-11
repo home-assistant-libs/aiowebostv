@@ -3,6 +3,7 @@ import asyncio
 import base64
 import copy
 import json
+import logging
 import os
 from datetime import timedelta
 
@@ -19,6 +20,8 @@ from .exceptions import (
 from .handshake import REGISTRATION_MESSAGE
 
 SOUND_OUTPUTS_TO_DELAY_CONSECUTIVE_VOLUME_STEPS = {"external_arc"}
+
+_LOGGER = logging.getLogger(__package__)
 
 
 class WebOsClient:
@@ -111,8 +114,10 @@ class WebOsClient:
             )
 
             # send hello
+            _LOGGER.debug("send(%s): hello", self.host)
             await main_ws.send(json.dumps({"id": "hello", "type": "hello"}))
             raw_response = await main_ws.recv()
+            _LOGGER.debug("recv(%s): %s", self.host, raw_response)
             response = json.loads(raw_response)
 
             if response["type"] == "hello":
@@ -121,8 +126,10 @@ class WebOsClient:
                 raise WebOsTvCommandError(f"Invalid request type {response}")
 
             # send registration
+            _LOGGER.debug("send(%s): registration", self.host)
             await main_ws.send(json.dumps(self.registration_msg()))
             raw_response = await main_ws.recv()
+            _LOGGER.debug("recv(%s): registration", self.host)
             response = json.loads(raw_response)
 
             if (
@@ -130,6 +137,7 @@ class WebOsClient:
                 and response["payload"]["pairingType"] == "PROMPT"
             ):
                 raw_response = await main_ws.recv()
+                _LOGGER.debug("recv(%s): pairing", self.host)
                 response = json.loads(raw_response)
                 if response["type"] == "registered":
                     self.client_key = response["payload"]["client-key"]
@@ -202,6 +210,7 @@ class WebOsClient:
             await asyncio.wait(handler_tasks, return_when=asyncio.FIRST_COMPLETED)
 
         except Exception as ex:  # pylint: disable=broad-except
+            _LOGGER.debug("exception(%s): %s", self.host, repr(ex), exc_info=True)
             if not res.done():
                 res.set_exception(ex)
         finally:
@@ -291,6 +300,7 @@ class WebOsClient:
         try:
             async for raw_msg in web_socket:
                 if callbacks or futures:
+                    _LOGGER.debug("recv(%s): %s", self.host, raw_msg)
                     msg = json.loads(raw_msg)
                     uid = msg.get("id")
                     callback = self.callbacks.get(uid)
@@ -581,6 +591,7 @@ class WebOsClient:
         if self.connection is None:
             raise WebOsTvCommandError("Not connected, can't execute command.")
 
+        _LOGGER.debug("send(%s): %s", self.host, message)
         await self.connection.send(json.dumps(message))
 
     async def request(self, uri, payload=None, cmd_type="request", uid=None):
@@ -639,6 +650,7 @@ class WebOsClient:
         if self.input_connection is None:
             raise WebOsTvCommandError("Couldn't execute input command.")
 
+        _LOGGER.debug("send(%s): %s", self.host, message)
         await self.input_connection.send(message)
 
     # high level request handling
