@@ -210,7 +210,7 @@ class WebOsClient:
             await asyncio.wait(handler_tasks, return_when=asyncio.FIRST_COMPLETED)
 
         except Exception as ex:  # pylint: disable=broad-except
-            _LOGGER.debug("exception(%s): %s", self.host, repr(ex), exc_info=True)
+            _LOGGER.debug("exception(%s): %r", self.host, ex, exc_info=True)
             if not res.done():
                 res.set_exception(ex)
         finally:
@@ -259,25 +259,6 @@ class WebOsClient:
                         await asyncio.shield(closeout_task)
                     except asyncio.CancelledError:
                         pass
-
-    async def ping_handler(self, web_socket, interval, timeout):
-        """Ping Handler loop."""
-        try:
-            while True:
-                await asyncio.sleep(interval)
-                # In the "Suspend" state the tv can keep a connection alive,
-                # but will not respond to pings
-                if self._power_state.get("state") != "Suspend":
-                    ping_waiter = await web_socket.ping()
-                    if timeout is not None:
-                        await asyncio.wait_for(ping_waiter, timeout=timeout)
-        except (
-            asyncio.TimeoutError,
-            asyncio.CancelledError,
-            websockets.exceptions.ConnectionClosedError,
-            websockets.exceptions.ConnectionClosedOK,
-        ):
-            pass
 
     @staticmethod
     async def callback_handler(queue, callback, future):
