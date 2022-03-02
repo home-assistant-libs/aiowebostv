@@ -9,9 +9,9 @@ jobs:
     name: Builds and publishes releases to PyPI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v3.0.0
       - name: Set up Python 3.8
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v3.0.0
         with:
           python-version: 3.8
       - name: Install wheel
