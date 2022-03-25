@@ -463,6 +463,7 @@ class WebOsClient:
                 pass
 
         if app_id == "com.webos.app.livetv" and self._current_channel is None:
+            await asyncio.sleep(2)
             try:
                 await self.subscribe_current_channel(self.set_current_channel_state)
             except WebOsTvCommandError:
