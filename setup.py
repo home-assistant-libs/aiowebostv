@@ -20,7 +20,7 @@ setup(
     long_description_content_type="text/markdown",
     packages=["aiowebostv"],
     python_requires=">=3.9",
-    install_requires=["websockets>=9.1"],
+    install_requires=["websockets>=10.3"],
     include_package_data=True,
     zip_safe=False,
     classifiers=[
