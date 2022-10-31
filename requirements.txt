@@ -1,1 +1,1 @@
-websockets==10.3
+websockets==10.4
