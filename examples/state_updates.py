@@ -27,7 +27,7 @@ async def on_state_change(client):
 
 
 async def main():
-    """Subscribed State Updates Example."""
+    """Subscribe State Updates Example."""
     client = WebOsClient(HOST, CLIENT_KEY)
     await client.register_state_update_callback(on_state_change)
     await client.connect()

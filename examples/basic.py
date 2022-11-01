@@ -9,8 +9,7 @@ CLIENT_KEY = "140cce792ae045920e14da4daa414582"
 
 
 async def main():
-    """Basic webOS client example."""
-
+    """Webos client example."""
     client = WebOsClient(HOST, CLIENT_KEY)
     await client.connect()
 

@@ -3,9 +3,10 @@ import asyncio
 from contextlib import suppress
 from datetime import datetime
 
+from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
+
 from aiowebostv import WebOsClient
 from aiowebostv.exceptions import WebOsTvCommandError
-from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
 
 WEBOSTV_EXCEPTIONS = (
     OSError,
