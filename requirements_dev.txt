@@ -2,6 +2,6 @@
 -r requirements_lint.txt
 pre-commit==2.20.0
 tox==3.27.1
-wheel==0.38.2
+wheel==0.38.4
 
 -e .
