@@ -5,6 +5,7 @@ import copy
 import json
 import logging
 import os
+import ssl
 from datetime import timedelta
 
 import websockets
@@ -32,7 +33,7 @@ class WebOsClient:
     ):
         """Initialize the client."""
         self.host = host
-        self.port = 3000
+        self.port = 3001
         self.client_key = client_key
         self.command_count = 0
         self.timeout_connect = timeout_connect
@@ -102,13 +103,18 @@ class WebOsClient:
         main_ws = None
         input_ws = None
         try:
+            # webOS uses self-signed certificates, thus we need to use an empty
+            # SSLContext to bypass validation errors.
+            ssl_context = ssl.SSLContext()
+
             main_ws = await asyncio.wait_for(
                 ws_connect(
-                    f"ws://{self.host}:{self.port}",
+                    f"wss://{self.host}:{self.port}",
                     ping_interval=self.ping_interval,
                     ping_timeout=self.ping_timeout,
                     close_timeout=self.timeout_connect,
                     max_size=None,
+                    ssl=ssl_context,
                 ),
                 timeout=self.timeout_connect,
             )
@@ -166,6 +172,7 @@ class WebOsClient:
                     ping_interval=self.ping_interval,
                     ping_timeout=self.ping_timeout,
                     close_timeout=self.timeout_connect,
+                    ssl=ssl_context,
                 ),
                 timeout=self.timeout_connect,
             )
