@@ -22,6 +22,9 @@ from .handshake import REGISTRATION_MESSAGE
 
 SOUND_OUTPUTS_TO_DELAY_CONSECUTIVE_VOLUME_STEPS = {"external_arc"}
 
+WS_PORT = 3000
+WSS_PORT = 3001
+
 _LOGGER = logging.getLogger(__package__)
 
 
@@ -33,7 +36,6 @@ class WebOsClient:
     ):
         """Initialize the client."""
         self.host = host
-        self.port = 3001
         self.client_key = client_key
         self.command_count = 0
         self.timeout_connect = timeout_connect
@@ -96,28 +98,37 @@ class WebOsClient:
         handshake["payload"]["client-key"] = self.client_key
         return handshake
 
+    async def _ws_connect(self, uri, ssl_context):
+        """Create websocket connection."""
+        _LOGGER.debug("connect(%s): uri: %s", self.host, uri)
+        return await ws_connect(
+            uri,
+            ping_interval=self.ping_interval,
+            ping_timeout=self.ping_timeout,
+            open_timeout=self.timeout_connect,
+            close_timeout=self.timeout_connect,
+            max_size=None,
+            ssl=ssl_context,
+        )
+
     async def connect_handler(self, res):
         """Handle connection for webOS TV."""
         # pylint: disable=too-many-locals,too-many-statements
         handler_tasks = set()
         main_ws = None
         input_ws = None
+        ssl_context = None
         try:
-            # webOS uses self-signed certificates, thus we need to use an empty
-            # SSLContext to bypass validation errors.
-            ssl_context = ssl.SSLContext()
-
-            main_ws = await asyncio.wait_for(
-                ws_connect(
-                    f"wss://{self.host}:{self.port}",
-                    ping_interval=self.ping_interval,
-                    ping_timeout=self.ping_timeout,
-                    close_timeout=self.timeout_connect,
-                    max_size=None,
-                    ssl=ssl_context,
-                ),
-                timeout=self.timeout_connect,
-            )
+            try:
+                uri = f"ws://{self.host}:{WS_PORT}"
+                main_ws = await self._ws_connect(uri, ssl_context)
+            except websockets.exceptions.InvalidMessage:
+                # InvalidMessage is raised when firmware enforce using ssl
+                # webOS uses self-signed certificates, thus we need to use an empty
+                # SSLContext to bypass validation errors.
+                ssl_context = ssl.SSLContext()
+                uri = f"wss://{self.host}:{WSS_PORT}"
+                main_ws = await self._ws_connect(uri, ssl_context)
 
             # send hello
             _LOGGER.debug("send(%s): hello", self.host)
@@ -166,16 +177,7 @@ class WebOsClient:
             # endpoint on the main connection
             sockres = await self.request(ep.INPUT_SOCKET)
             inputsockpath = sockres.get("socketPath")
-            input_ws = await asyncio.wait_for(
-                ws_connect(
-                    inputsockpath,
-                    ping_interval=self.ping_interval,
-                    ping_timeout=self.ping_timeout,
-                    close_timeout=self.timeout_connect,
-                    ssl=ssl_context,
-                ),
-                timeout=self.timeout_connect,
-            )
+            input_ws = await self._ws_connect(inputsockpath, ssl_context)
 
             handler_tasks.add(asyncio.create_task(input_ws.wait_closed()))
             self.input_connection = input_ws
