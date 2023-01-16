@@ -156,6 +156,14 @@ class WebOsClient:
                 raw_response = await main_ws.recv()
                 _LOGGER.debug("recv(%s): pairing", self.host)
                 response = json.loads(raw_response)
+                _LOGGER.debug(
+                    "pairing(%s): type: %s, error: %s",
+                    self.host,
+                    response["type"],
+                    response.get("error"),
+                )
+                if response["type"] == "error":
+                    raise WebOsTvPairError(response["error"])
                 if response["type"] == "registered":
                     self.client_key = response["payload"]["client-key"]
 
