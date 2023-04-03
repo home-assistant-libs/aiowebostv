@@ -17,7 +17,7 @@ repos:
           - --max-complexity=18
           - --select=B,C,E,F,W,T4,B9
   - repo: https://github.com/ambv/black
-    rev: 23.1.0
+    rev: 23.3.0
     hooks:
       - id: black
         language_version: python3
