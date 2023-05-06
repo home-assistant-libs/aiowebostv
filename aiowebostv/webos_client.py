@@ -578,6 +578,7 @@ class WebOsClient:
             await self.do_state_update_callbacks()
 
     async def set_media_state(self, foreground_app_info):
+        """Set TV media player state callback."""
         self._media_state = foreground_app_info
 
         if self.state_update_callbacks and self.do_state_update:
@@ -631,7 +632,11 @@ class WebOsClient:
         if payload is None:
             raise WebOsTvCommandError(f"Invalid request response {response}")
 
-        return_value = payload.get("returnValue") or payload.get("subscribed") or payload.get("subscription")
+        return_value = (
+            payload.get("returnValue")
+            or payload.get("subscribed")
+            or payload.get("subscription")
+        )
 
         if response.get("type") == "error":
             error = response.get("error")
@@ -997,5 +1002,5 @@ class WebOsClient:
 
         async def current_media(payload):
             await callback(payload)
-        
+
         return await self.subscribe(current_media, ep.GET_MEDIA_FOREGROUND_APP_INFO)
