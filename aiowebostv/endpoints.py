@@ -1,4 +1,5 @@
 """webOS TV public SSAP API endpoints."""
+
 GET_SERVICES = "api/getServiceList"
 SET_MUTE = "audio/setMute"
 GET_AUDIO_STATUS = "audio/getStatus"

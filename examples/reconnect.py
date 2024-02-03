@@ -1,4 +1,5 @@
 """Silent connect/reconnect example."""
+
 import asyncio
 from contextlib import suppress
 from datetime import datetime

@@ -1,4 +1,5 @@
 """Known webOS control buttons."""
+
 BUTTONS = (
     "LEFT",
     "RIGHT",
