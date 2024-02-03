@@ -1,4 +1,5 @@
 """Basic webOS client example."""
+
 import asyncio
 
 from aiowebostv import WebOsClient

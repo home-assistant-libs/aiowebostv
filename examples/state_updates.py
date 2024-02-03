@@ -1,4 +1,5 @@
 """Subscribed state updates example."""
+
 import asyncio
 
 from aiowebostv import WebOsClient
