@@ -65,6 +65,7 @@ class WebOsClient:
         self._volume_step_lock = asyncio.Lock()
         self._volume_step_delay = None
         self._loop = asyncio.get_running_loop()
+        self._media_state = None
 
     async def connect(self):
         """Connect to webOS TV device."""
@@ -205,6 +206,7 @@ class WebOsClient:
                 self.subscribe_apps(self.set_apps_state),
                 self.subscribe_inputs(self.set_inputs_state),
                 self.subscribe_sound_output(self.set_sound_output_state),
+                self.subscribe_media_foreground_app(self.set_media_state),
             }
             subscribe_tasks = set()
             for state_update in subscribe_state_updates:
@@ -264,6 +266,7 @@ class WebOsClient:
             self._software_info = None
             self._hello_info = None
             self._sound_output = None
+            self._media_state = None
 
             for callback in self.state_update_callbacks:
                 closeout.add(asyncio.create_task(callback(self)))
@@ -424,6 +427,11 @@ class WebOsClient:
             return self._power_state.get("state") != "Screen Off"
         return False
 
+    @property
+    def media_state(self):
+        """Return media player state."""
+        return self._media_state
+
     async def register_state_update_callback(self, callback):
         """Register user state update callback."""
         self.state_update_callbacks.append(callback)
@@ -569,6 +577,13 @@ class WebOsClient:
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
 
+    async def set_media_state(self, foreground_app_info):
+        """Set TV media player state callback."""
+        self._media_state = foreground_app_info
+
+        if self.state_update_callbacks and self.do_state_update:
+            await self.do_state_update_callbacks()
+
     # low level request handling
 
     async def command(self, request_type, uri, payload=None, uid=None):
@@ -617,7 +632,11 @@ class WebOsClient:
         if payload is None:
             raise WebOsTvCommandError(f"Invalid request response {response}")
 
-        return_value = payload.get("returnValue") or payload.get("subscribed")
+        return_value = (
+            payload.get("returnValue")
+            or payload.get("subscribed")
+            or payload.get("subscription")
+        )
 
         if response.get("type") == "error":
             error = response.get("error")
@@ -972,3 +991,16 @@ class WebOsClient:
     async def fast_forward(self):
         """Fast Forward media."""
         return await self.request(ep.MEDIA_FAST_FORWARD)
+
+    async def get_media_foreground_app(self):
+        """Get media player state."""
+        res = await self.request(ep.GET_MEDIA_FOREGROUND_APP_INFO)
+        return res.get("foregroundAppInfo")
+
+    async def subscribe_media_foreground_app(self, callback):
+        """Subscribe to changes in media player state."""
+
+        async def current_media(payload):
+            await callback(payload)
+
+        return await self.subscribe(current_media, ep.GET_MEDIA_FOREGROUND_APP_INFO)
