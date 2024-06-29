@@ -6,7 +6,7 @@ from setuptools import setup
 
 PROJECT_DIR = Path(__file__).parent.resolve()
 README_FILE = PROJECT_DIR / "README.md"
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 
 setup(
