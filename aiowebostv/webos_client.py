@@ -700,9 +700,12 @@ class WebOsClient:
         icon_extension = ""
 
         if icon_path is not None:
-            icon_extension = os.path.splitext(icon_path)[1][1:]
-            with open(icon_path, "rb") as icon_file:
-                icon_encoded_string = base64.b64encode(icon_file.read()).decode("ascii")
+            split = await self._loop.run_in_executor(None, os.path.splitext, icon_path)
+            icon_extension = split[1][1:]
+            icon = await self._loop.run_in_executor(
+                None, lambda: open(icon_path, "rb").read()
+            )
+            icon_encoded_string = base64.b64encode(icon).decode("ascii")
 
         return await self.request(
             ep.SHOW_MESSAGE,
