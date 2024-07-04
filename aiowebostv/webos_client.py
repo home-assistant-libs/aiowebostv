@@ -694,24 +694,28 @@ class WebOsClient:
         message = f"type:scroll\ndx:{d_x}\ndy:{d_y}\n\n"
         await self.input_command(message)
 
+    def read_icon(self, icon_path, message_payload):
+        """Read icon & set data in message payload."""
+        message_payload["iconExtension"] = os.path.splitext(icon_path)[1][1:]
+        with open(icon_path, "rb") as icon_file:
+            message_payload["iconData"] = base64.b64encode(icon_file.read()).decode(
+                "ascii"
+            )
+
     async def send_message(self, message, icon_path=None):
         """Show a floating message."""
-        icon_encoded_string = ""
-        icon_extension = ""
+        message_payload = {
+            "message": message,
+            "iconData": "",
+            "iconExtension": "",
+        }
 
         if icon_path is not None:
-            icon_extension = os.path.splitext(icon_path)[1][1:]
-            with open(icon_path, "rb") as icon_file:
-                icon_encoded_string = base64.b64encode(icon_file.read()).decode("ascii")
+            await self._loop.run_in_executor(
+                None, self.read_icon, icon_path, message_payload
+            )
 
-        return await self.request(
-            ep.SHOW_MESSAGE,
-            {
-                "message": message,
-                "iconData": icon_encoded_string,
-                "iconExtension": icon_extension,
-            },
-        )
+        return await self.request(ep.SHOW_MESSAGE, message_payload)
 
     async def get_power_state(self):
         """Get current power state."""
