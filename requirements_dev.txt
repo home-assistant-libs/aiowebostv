@@ -1,6 +1,6 @@
 -r requirements.txt
 -r requirements_lint.txt
-pre-commit==4.0.0
+pre-commit==4.0.1
 tox==4.21.2
 wheel==0.44.0
 
