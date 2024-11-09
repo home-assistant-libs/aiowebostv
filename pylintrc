@@ -18,6 +18,7 @@ disable=
   too-many-arguments,
   too-many-public-methods,
   too-many-instance-attributes,
+  too-many-positional-arguments,
   too-many-branches,
   too-many-lines
 
