@@ -2,40 +2,26 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
+      - id: no-commit-to-branch
+        args:
+          - --branch=main
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-docstring-first
       - id: check-yaml
       - id: debug-statements
-  - repo: https://github.com/PyCQA/flake8
-    rev: 7.1.1
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
     hooks:
-      - id: flake8
+      - id: ruff
         args:
-          - --max-line-length=500
-          - --ignore=E203,E266,E501,W503
-          - --max-complexity=18
-          - --select=B,C,E,F,W,T4,B9
-  - repo: https://github.com/ambv/black
-    rev: 24.10.0
-    hooks:
-      - id: black
-        language_version: python3
+          - --fix
+      - id: ruff-format
   - repo: https://github.com/asottile/pyupgrade
     rev: v3.19.1
     hooks:
       - id: pyupgrade
         args: ["--py39-plus"]
-  - repo: https://github.com/PyCQA/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
-        args:
-          - --multi-line=3
-          - --trailing-comma
-          - --force-grid-wrap=0
-          - --use-parentheses
-          - --line-width=88
   - repo: https://github.com/PyCQA/pydocstyle
     rev: 6.3.0
     hooks:
@@ -52,15 +38,6 @@ repos:
           - --skip="./.*,*.csv,*.json"
           - --quiet-level=2
         exclude_types: [csv, json]
-  - repo: https://github.com/PyCQA/bandit
-    rev: 1.8.2
-    hooks:
-      - id: bandit
-        args:
-          - --quiet
-          - --format=custom
-          - --configfile=bandit.yaml
-        files: ^aiowebostv/.+\.py$
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v4.0.0-alpha.8
     hooks:
