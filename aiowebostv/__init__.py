@@ -3,4 +3,4 @@
 from .exceptions import WebOsTvCommandError, WebOsTvPairError
 from .webos_client import WebOsClient
 
-__all__ = ["WebOsTvCommandError", "WebOsTvPairError", "WebOsClient"]
+__all__ = ["WebOsClient", "WebOsTvCommandError", "WebOsTvPairError"]
