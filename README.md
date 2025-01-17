@@ -6,7 +6,7 @@ Based on:
 - `bscpylgtv` library at https://github.com/chros73/bscpylgtv
 
 ## Requirements
-- Python >= 3.9
+- Python >= 3.11
 
 ## Install
 ```bash
