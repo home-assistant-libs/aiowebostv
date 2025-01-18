@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import ssl
+from contextlib import suppress
 from datetime import timedelta
 
 import websockets
@@ -81,10 +82,8 @@ class WebOsClient:
         """Disconnect from webOS TV device."""
         if self.is_connected():
             self.connect_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await self.connect_task
-            except asyncio.CancelledError:
-                pass
 
     def is_registered(self):
         """Paired with the tv."""
@@ -214,10 +213,8 @@ class WebOsClient:
                 subscribe_tasks.add(asyncio.create_task(state_update))
             await asyncio.wait(subscribe_tasks)
             for task in subscribe_tasks:
-                try:
+                with suppress(WebOsTvServiceNotFoundError):
                     task.result()
-                except WebOsTvServiceNotFoundError:
-                    pass
             # set placeholder power state if not available
             if not self._power_state:
                 self._power_state = {"state": "Unknown"}
@@ -276,23 +273,19 @@ class WebOsClient:
                 closeout_task = asyncio.create_task(asyncio.wait(closeout))
 
                 while not closeout_task.done():
-                    try:
+                    with suppress(asyncio.CancelledError):
                         await asyncio.shield(closeout_task)
-                    except asyncio.CancelledError:
-                        pass
 
     @staticmethod
     async def callback_handler(queue, callback, future):
         """Handle callbacks."""
-        try:
+        with suppress(asyncio.CancelledError):
             while True:
                 msg = await queue.get()
                 payload = msg.get("payload")
                 await callback(payload)
                 if future is not None and not future.done():
                     future.set_result(msg)
-        except asyncio.CancelledError:
-            pass
 
     async def consumer_handler(self, web_socket, callbacks, futures):
         """Callbacks consumer handler."""
@@ -336,10 +329,8 @@ class WebOsClient:
                 closeout_task = asyncio.create_task(asyncio.wait(tasks))
 
                 while not closeout_task.done():
-                    try:
+                    with suppress(asyncio.CancelledError):
                         await asyncio.shield(closeout_task)
-                    except asyncio.CancelledError:
-                        pass
 
     # manage state
     @property
@@ -414,12 +405,9 @@ class WebOsClient:
         if state == "Unknown":
             # fallback to current app id for some older webos versions
             # which don't support explicit power state
-            if self._current_app_id in [None, ""]:
-                return False
-            return True
-        if state in [None, "Power Off", "Suspend", "Active Standby"]:
-            return False
-        return True
+            return self._current_app_id not in [None, ""]
+
+        return state not in [None, "Power Off", "Suspend", "Active Standby"]
 
     @property
     def is_screen_on(self):
@@ -483,17 +471,13 @@ class WebOsClient:
         self._current_app_id = app_id
 
         if self._channels is None:
-            try:
+            with suppress(WebOsTvCommandError):
                 await self.subscribe_channels(self.set_channels_state)
-            except WebOsTvCommandError:
-                pass
 
         if app_id == "com.webos.app.livetv" and self._current_channel is None:
             await asyncio.sleep(2)
-            try:
+            with suppress(WebOsTvCommandError):
                 await self.subscribe_current_channel(self.set_current_channel_state)
-            except WebOsTvCommandError:
-                pass
 
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
@@ -529,10 +513,8 @@ class WebOsClient:
         self._current_channel = channel
 
         if self._channel_info is None:
-            try:
+            with suppress(WebOsTvCommandError):
                 await self.subscribe_channel_info(self.set_channel_info_state)
-            except WebOsTvCommandError:
-                pass
 
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
