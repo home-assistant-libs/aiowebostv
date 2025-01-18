@@ -54,6 +54,7 @@ if __name__ == "__main__":
 ### Subscribed State Updates Example:
 ```python
 import asyncio
+import signal
 
 from aiowebostv import WebOsClient
 
@@ -89,8 +90,10 @@ async def main():
     # Store this key for future use
     print(f"Client key: {client.client_key}")
 
-    # Change something using the remote during sleep period to get updates
-    await asyncio.sleep(30)
+    # Change something using the remote to get updates or ctrl-c to exit
+    sig_event = asyncio.Event()
+    signal.signal(signal.SIGINT, lambda _exit_code, _frame: sig_event.set())
+    await sig_event.wait()
 
     await client.disconnect()
 
