@@ -1,8 +1,9 @@
 """Silent connect/reconnect example."""
 
 import asyncio
+import signal
 from contextlib import suppress
-from datetime import datetime
+from datetime import UTC, datetime
 
 from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
 
@@ -28,10 +29,14 @@ async def main():
     """Silent connect/reconnect example, assuming TV is paired."""
     client = WebOsClient(HOST, CLIENT_KEY)
 
-    while True:
+    sig_event = asyncio.Event()
+    signal.signal(signal.SIGINT, lambda _exit_code, _frame: sig_event.set())
+
+    # Turn the TV on or off using the remote or ctrl-c to exit
+    while not sig_event.is_set():
         await asyncio.sleep(1)
 
-        now = datetime.now().strftime("%H:%M:%S")
+        now = datetime.now(UTC).astimezone().strftime("%H:%M:%S.%f")[:-3]
         is_connected = client.is_connected()
         is_on = client.is_on
 
@@ -42,6 +47,8 @@ async def main():
 
         with suppress(*WEBOSTV_EXCEPTIONS):
             await client.connect()
+
+    await client.disconnect()
 
 
 if __name__ == "__main__":

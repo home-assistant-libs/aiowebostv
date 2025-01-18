@@ -29,7 +29,5 @@ lint.ignore = [
 
 [lint.per-file-ignores]
 "examples/*" = [
-    "DTZ005",    # `datetime.datetime.now()` called without a `tz` argument
-    "INP001",    # File is part of an implicit namespace package. Add an `__init__.py`.
     "T201",      # `print` found
 ]
