@@ -10,7 +10,7 @@ HOST = "192.168.1.39"
 CLIENT_KEY = "140cce792ae045920e14da4daa414582"
 
 
-async def on_state_change(client):
+async def on_state_change(client: WebOsClient) -> None:
     """State changed callback."""
     print("State changed:")
     print(f"System info: {client.system_info}")
@@ -28,7 +28,7 @@ async def on_state_change(client):
     print(f"Sound output: {client.sound_output}")
 
 
-async def main():
+async def main() -> None:
     """Subscribe State Updates Example."""
     client = WebOsClient(HOST, CLIENT_KEY)
     await client.register_state_update_callback(on_state_change)

@@ -25,7 +25,7 @@ HOST = "192.168.1.39"
 CLIENT_KEY = "140cce792ae045920e14da4daa414582"
 
 
-async def main():
+async def main() -> None:
     """Silent connect/reconnect example, assuming TV is paired."""
     client = WebOsClient(HOST, CLIENT_KEY)
 
