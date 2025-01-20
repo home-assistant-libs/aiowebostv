@@ -9,7 +9,7 @@ HOST = "192.168.1.39"
 CLIENT_KEY = "140cce792ae045920e14da4daa414582"
 
 
-async def main():
+async def main() -> None:
     """Webos client example."""
     client = WebOsClient(HOST, CLIENT_KEY)
     await client.connect()
@@ -17,9 +17,9 @@ async def main():
     # Store this key for future use
     print(f"Client key: {client.client_key}")
 
-    apps = await client.get_apps_all()
-    for app in apps:
-        print(app)
+    if (apps := await client.get_apps_all()) is not None:
+        for app in apps:
+            print(app)
 
     await client.disconnect()
 

@@ -3,11 +3,6 @@ target-version = "py311"
 lint.select = ["ALL"]
 
 lint.ignore = [
-    "ANN001",   # Missing type annotation for function argument
-    "ANN201",   # ANN001 Missing type annotation for function argument
-    "ANN202",   # Missing return type annotation for private function
-    "ANN204",   # Missing return type annotation for special method
-    "ANN205",   # Missing return type annotation for staticmethod
     "BLE001",   # Do not catch blind exception: `Exception`
     "C901",     # is too complex
     "COM812",   # Trailing comma missing (conflicts with formatter)

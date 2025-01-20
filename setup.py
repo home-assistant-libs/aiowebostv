@@ -21,6 +21,7 @@ setup(
     long_description_content_type="text/markdown",
     packages=["aiowebostv"],
     python_requires=">=3.11",
+    package_data={"aiowebostv": ["py.typed"]},
     install_requires=["websockets>=10.3"],
     include_package_data=True,
     zip_safe=False,

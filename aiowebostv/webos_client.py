@@ -7,10 +7,15 @@ import json
 import logging
 import os
 import ssl
+from asyncio import Future, Task
+from asyncio.queues import Queue
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import timedelta
+from typing import Any, cast
 
 import websockets
+from websockets.client import WebSocketClientProtocol
 from websockets.client import connect as ws_connect
 
 from . import endpoints as ep
@@ -34,72 +39,82 @@ class WebOsClient:
     """webOS TV client class."""
 
     def __init__(
-        self, host, client_key=None, timeout_connect=2, ping_interval=5, ping_timeout=20
-    ):
+        self,
+        host: str,
+        client_key: str | None = None,
+        timeout_connect: float = 2,
+        ping_interval: float = 5,
+        ping_timeout: float = 20,
+    ) -> None:
         """Initialize the client."""
         self.host = host
         self.client_key = client_key
-        self.command_count = 0
+        self.command_count: int = 0
         self.timeout_connect = timeout_connect
         self.ping_interval = ping_interval
         self.ping_timeout = ping_timeout
-        self.connect_task = None
-        self.connect_result = None
-        self.connection = None
-        self.input_connection = None
-        self.callbacks = {}
-        self.futures = {}
-        self._power_state = {}
-        self._current_app_id = None
-        self._muted = None
-        self._volume = None
-        self._current_channel = None
-        self._channel_info = None
-        self._channels = None
-        self._apps = {}
-        self._extinputs = {}
-        self._system_info = None
-        self._software_info = None
-        self._hello_info = None
-        self._sound_output = None
-        self.state_update_callbacks = []
+        self.connect_task: Task | None = None
+        self.connect_result: Future[bool] | None = None
+        self.connection: WebSocketClientProtocol | None = None
+        self.input_connection: WebSocketClientProtocol | None = None
+        self.callbacks: dict[int, Callable] = {}
+        self.futures: dict[int, Future[dict[str, Any]]] = {}
+        self._power_state: dict[str, Any] = {}
+        self._current_app_id: str | None = None
+        self._muted: bool | None = None
+        self._volume: int | None = None
+        self._current_channel: dict[str, Any] | None = None
+        self._channel_info: dict[str, Any] | None = None
+        self._channels: list[dict[str, Any]] | None = None
+        self._apps: dict[str, Any] = {}
+        self._extinputs: dict[str, Any] = {}
+        self._system_info: dict[str, Any] = {}
+        self._software_info: dict[str, Any] = {}
+        self._hello_info: dict[str, Any] = {}
+        self._sound_output: str | None = None
+        self.state_update_callbacks: list[Callable] = []
         self.do_state_update = False
         self._volume_step_lock = asyncio.Lock()
-        self._volume_step_delay = None
+        self._volume_step_delay: timedelta | None = None
         self._loop = asyncio.get_running_loop()
-        self._media_state = None
+        self._media_state: list[dict[str, Any]] = []
 
-    async def connect(self):
+    async def connect(self) -> bool:
         """Connect to webOS TV device."""
-        if not self.is_connected():
-            self.connect_result = self._loop.create_future()
-            self.connect_task = asyncio.create_task(
-                self.connect_handler(self.connect_result)
-            )
+        if self.is_connected():
+            return True
+
+        self.connect_result = self._loop.create_future()
+        self.connect_task = asyncio.create_task(
+            self.connect_handler(self.connect_result)
+        )
         return await self.connect_result
 
-    async def disconnect(self):
+    async def disconnect(self) -> None:
         """Disconnect from webOS TV device."""
-        if self.is_connected():
+        if self.connect_task is not None and not self.connect_task.done():
             self.connect_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self.connect_task
+                self.connect_task = None
 
-    def is_registered(self):
+    def is_registered(self) -> bool:
         """Paired with the tv."""
         return self.client_key is not None
 
-    def is_connected(self):
+    def is_connected(self) -> bool:
         """Return true if connected to the tv."""
         return self.connect_task is not None and not self.connect_task.done()
 
-    def registration_msg(self):
+    def registration_msg(self) -> dict[str, Any]:
         """Create registration message."""
         handshake = copy.deepcopy(REGISTRATION_MESSAGE)
-        handshake["payload"]["client-key"] = self.client_key
+        handshake["payload"]["client-key"] = self.client_key  # type: ignore[index]
         return handshake
 
-    async def _ws_connect(self, uri, ssl_context):
+    async def _ws_connect(
+        self, uri: str, ssl_context: ssl.SSLContext | None
+    ) -> WebSocketClientProtocol:
         """Create websocket connection."""
         _LOGGER.debug("connect(%s): uri: %s", self.host, uri)
         return await ws_connect(
@@ -112,13 +127,12 @@ class WebOsClient:
             ssl=ssl_context,
         )
 
-    async def connect_handler(self, res):
+    async def connect_handler(self, res: Future) -> None:
         """Handle connection for webOS TV."""
-        # pylint: disable=too-many-locals,too-many-statements
-        handler_tasks = set()
-        main_ws = None
-        input_ws = None
-        ssl_context = None
+        handler_tasks: set[Task] = set()
+        main_ws: WebSocketClientProtocol | None = None
+        input_ws: WebSocketClientProtocol | None = None
+        ssl_context: ssl.SSLContext | None = None
         try:
             try:
                 uri = f"ws://{self.host}:{WS_PORT}"
@@ -185,7 +199,7 @@ class WebOsClient:
             # the url is dynamically generated and returned from the ep.INPUT_SOCKET
             # endpoint on the main connection
             sockres = await self.request(ep.INPUT_SOCKET)
-            inputsockpath = sockres.get("socketPath")
+            inputsockpath = sockres["socketPath"]
             input_ws = await self._ws_connect(inputsockpath, ssl_context)
 
             handler_tasks.add(asyncio.create_task(input_ws.wait_closed()))
@@ -260,11 +274,11 @@ class WebOsClient:
             self._channels = None
             self._apps = {}
             self._extinputs = {}
-            self._system_info = None
-            self._software_info = None
-            self._hello_info = None
+            self._system_info = {}
+            self._software_info = {}
+            self._hello_info = {}
             self._sound_output = None
-            self._media_state = None
+            self._media_state = []
 
             for callback in self.state_update_callbacks:
                 closeout.add(asyncio.create_task(callback(self)))
@@ -277,7 +291,11 @@ class WebOsClient:
                         await asyncio.shield(closeout_task)
 
     @staticmethod
-    async def callback_handler(queue, callback, future):
+    async def callback_handler(
+        queue: Queue[dict[str, Any]],
+        callback: Callable,
+        future: Future[dict[str, Any]] | None,
+    ) -> None:
         """Handle callbacks."""
         with suppress(asyncio.CancelledError):
             while True:
@@ -287,10 +305,15 @@ class WebOsClient:
                 if future is not None and not future.done():
                     future.set_result(msg)
 
-    async def consumer_handler(self, web_socket, callbacks, futures):
+    async def consumer_handler(
+        self,
+        web_socket: WebSocketClientProtocol,
+        callbacks: dict[int, Callable],
+        futures: dict[int, Future],
+    ) -> None:
         """Callbacks consumer handler."""
-        callback_queues = {}
-        callback_tasks = {}
+        callback_queues: dict[int, Queue[dict[str, Any]]] = {}
+        callback_tasks: dict[int, Task] = {}
 
         try:
             async for raw_msg in web_socket:
@@ -302,7 +325,7 @@ class WebOsClient:
                     future = self.futures.get(uid)
                     if callback is not None:
                         if uid not in callback_tasks:
-                            queue = asyncio.Queue()
+                            queue: Queue[dict[str, Any]] = asyncio.Queue()
                             callback_queues[uid] = queue
                             callback_tasks[uid] = asyncio.create_task(
                                 self.callback_handler(queue, callback, future)
@@ -322,8 +345,7 @@ class WebOsClient:
                 if not task.done():
                     task.cancel()
 
-            tasks = set()
-            tasks.update(callback_tasks.values())
+            tasks = set(callback_tasks.values())
 
             if tasks:
                 closeout_task = asyncio.create_task(asyncio.wait(tasks))
@@ -334,72 +356,72 @@ class WebOsClient:
 
     # manage state
     @property
-    def power_state(self):
+    def power_state(self) -> dict[str, Any]:
         """Return TV power state."""
         return self._power_state
 
     @property
-    def current_app_id(self):
+    def current_app_id(self) -> str | None:
         """Return current TV App Id."""
         return self._current_app_id
 
     @property
-    def muted(self):
+    def muted(self) -> bool | None:
         """Return true if TV is muted."""
         return self._muted
 
     @property
-    def volume(self):
+    def volume(self) -> int | None:
         """Return current TV volume level."""
         return self._volume
 
     @property
-    def current_channel(self):
+    def current_channel(self) -> dict[str, Any] | None:
         """Return current TV channel."""
         return self._current_channel
 
     @property
-    def channel_info(self):
+    def channel_info(self) -> dict[str, Any] | None:
         """Return current channel info."""
         return self._channel_info
 
     @property
-    def channels(self):
+    def channels(self) -> list[dict[str, Any]] | None:
         """Return channel list."""
         return self._channels
 
     @property
-    def apps(self):
+    def apps(self) -> dict[str, Any]:
         """Return apps list."""
         return self._apps
 
     @property
-    def inputs(self):
+    def inputs(self) -> dict[str, Any]:
         """Return external inputs list."""
         return self._extinputs
 
     @property
-    def system_info(self):
+    def system_info(self) -> dict[str, Any]:
         """Return TV system info."""
         return self._system_info
 
     @property
-    def software_info(self):
+    def software_info(self) -> dict[str, Any]:
         """Return TV software info."""
         return self._software_info
 
     @property
-    def hello_info(self):
+    def hello_info(self) -> dict[str, Any]:
         """Return TV hello info."""
         return self._hello_info
 
     @property
-    def sound_output(self):
+    def sound_output(self) -> str | None:
         """Return TV sound output."""
         return self._sound_output
 
     @property
-    def is_on(self):
+    def is_on(self) -> bool:
         """Return true if TV is powered on."""
         state = self._power_state.get("state")
         if state == "Unknown":
@@ -410,24 +432,24 @@ class WebOsClient:
         return state not in [None, "Power Off", "Suspend", "Active Standby"]
 
     @property
-    def is_screen_on(self):
+    def is_screen_on(self) -> bool:
         """Return true if screen is on."""
         if self.is_on:
             return self._power_state.get("state") != "Screen Off"
         return False
 
     @property
-    def media_state(self):
+    def media_state(self) -> list[dict[str, Any]]:
         """Return media player state."""
         return self._media_state
 
-    async def register_state_update_callback(self, callback):
+    async def register_state_update_callback(self, callback: Callable) -> None:
         """Register user state update callback."""
         self.state_update_callbacks.append(callback)
         if self.do_state_update:
             await callback(self)
 
-    def set_volume_step_delay(self, step_delay_ms):
+    def set_volume_step_delay(self, step_delay_ms: float | None) -> None:
         """Set volume step delay in ms or None to disable step delay."""
         if step_delay_ms is None:
             self._volume_step_delay = None
@@ -435,16 +457,16 @@ class WebOsClient:
 
         self._volume_step_delay = timedelta(milliseconds=step_delay_ms)
 
-    def unregister_state_update_callback(self, callback):
+    def unregister_state_update_callback(self, callback: Callable) -> None:
         """Unregister user state update callback."""
         if callback in self.state_update_callbacks:
             self.state_update_callbacks.remove(callback)
 
-    def clear_state_update_callbacks(self):
+    def clear_state_update_callbacks(self) -> None:
         """Clear user state update callback."""
         self.state_update_callbacks = []
 
-    async def do_state_update_callbacks(self):
+    async def do_state_update_callbacks(self) -> None:
         """Call user state update callback."""
         callbacks = set()
         for callback in self.state_update_callbacks:
@@ -453,14 +475,14 @@ class WebOsClient:
         if callbacks:
             await asyncio.gather(*callbacks)
 
-    async def set_power_state(self, payload):
+    async def set_power_state(self, payload: dict[str, bool | str]) -> None:
         """Set TV power state callback."""
         self._power_state = payload
 
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
 
-    async def set_current_app_state(self, app_id):
+    async def set_current_app_state(self, app_id: str) -> None:
         """Set current app state variable.
 
         This function also handles subscriptions to current channel and
@@ -482,28 +504,28 @@ class WebOsClient:
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
 
-    async def set_muted_state(self, muted):
+    async def set_muted_state(self, muted: bool) -> None:  # noqa: FBT001
         """Set TV mute state callback."""
         self._muted = muted
 
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
 
-    async def set_volume_state(self, volume):
+    async def set_volume_state(self, volume: int) -> None:
         """Set TV volume level callback."""
         self._volume = volume
 
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
 
-    async def set_channels_state(self, channels):
+    async def set_channels_state(self, channels: list[dict[str, Any]]) -> None:
         """Set TV channels callback."""
         self._channels = channels
 
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
 
-    async def set_current_channel_state(self, channel):
+    async def set_current_channel_state(self, channel: dict[str, Any]) -> None:
         """Set current channel state variable.
 
         This function also handles the channel info subscription,
@@ -519,14 +541,14 @@ class WebOsClient:
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
 
-    async def set_channel_info_state(self, channel_info):
+    async def set_channel_info_state(self, channel_info: dict[str, Any]) -> None:
         """Set TV channel info state callback."""
         self._channel_info = channel_info
 
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
 
-    async def set_apps_state(self, payload):
+    async def set_apps_state(self, payload: dict[str, Any]) -> None:
         """Set TV channel apps state callback."""
         apps = payload.get("launchPoints")
         if apps is not None:
@@ -544,7 +566,7 @@ class WebOsClient:
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
 
-    async def set_inputs_state(self, extinputs):
+    async def set_inputs_state(self, extinputs: list[dict[str, Any]]) -> None:
         """Set TV inputs state callback."""
         self._extinputs = {}
         for extinput in extinputs:
@@ -553,14 +575,14 @@ class WebOsClient:
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
 
-    async def set_sound_output_state(self, sound_output):
+    async def set_sound_output_state(self, sound_output: str) -> None:
         """Set TV sound output state callback."""
         self._sound_output = sound_output
 
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
 
-    async def set_media_state(self, foreground_app_info):
+    async def set_media_state(self, foreground_app_info: list[dict[str, bool]]) -> None:
         """Set TV media player state callback."""
         self._media_state = foreground_app_info
 
@@ -569,7 +591,13 @@ class WebOsClient:
 
     # low level request handling
 
-    async def command(self, request_type, uri, payload=None, uid=None):
+    async def command(
+        self,
+        request_type: str,
+        uri: str,
+        payload: dict[str, Any] | None = None,
+        uid: int | None = None,
+    ) -> None:
         """Build and send a command."""
         if uid is None:
             uid = self.command_count
@@ -591,7 +619,13 @@ class WebOsClient:
         _LOGGER.debug("send(%s): %s", self.host, message)
         await self.connection.send(json.dumps(message))
 
-    async def request(self, uri, payload=None, cmd_type="request", uid=None):
+    async def request(
+        self,
+        uri: str,
+        payload: dict[str, Any] | None = None,
+        cmd_type: str = "request",
+        uid: int | None = None,
+    ) -> dict[str, Any]:
         """Send a request and wait for response."""
         if uid is None:
             uid = self.command_count
@@ -633,7 +667,9 @@ class WebOsClient:
 
         return payload
 
-    async def subscribe(self, callback, uri, payload=None):
+    async def subscribe(
+        self, callback: Callable, uri: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Subscribe to updates."""
         uid = self.command_count
         self.command_count += 1
@@ -646,7 +682,7 @@ class WebOsClient:
             del self.callbacks[uid]
             raise
 
-    async def input_command(self, message):
+    async def input_command(self, message: str) -> None:
         """Execute TV input command."""
         if self.input_connection is None:
             raise WebOsTvCommandError("Couldn't execute input command.")
@@ -656,27 +692,27 @@ class WebOsClient:
 
     # high level request handling
 
-    async def button(self, name):
+    async def button(self, name: str) -> None:
         """Send button press command."""
         message = f"type:button\nname:{name}\n\n"
         await self.input_command(message)
 
-    async def move(self, d_x, d_y, down=0):
+    async def move(self, d_x: int, d_y: int, down: int = 0) -> None:
         """Send cursor move command."""
         message = f"type:move\ndx:{d_x}\ndy:{d_y}\ndown:{down}\n\n"
         await self.input_command(message)
 
-    async def click(self):
+    async def click(self) -> None:
         """Send cursor click command."""
         message = "type:click\n\n"
         await self.input_command(message)
 
-    async def scroll(self, d_x, d_y):
+    async def scroll(self, d_x: int, d_y: int) -> None:
         """Send scroll command."""
         message = f"type:scroll\ndx:{d_x}\ndy:{d_y}\n\n"
         await self.input_command(message)
 
-    def read_icon(self, icon_path, message_payload):
+    def read_icon(self, icon_path: str, message_payload: dict[str, Any]) -> None:
         """Read icon & set data in message payload."""
         message_payload["iconExtension"] = os.path.splitext(icon_path)[1][1:]
         with open(icon_path, "rb") as icon_file:
@@ -684,7 +720,9 @@ class WebOsClient:
                 "ascii"
             )
 
-    async def send_message(self, message, icon_path=None):
+    async def send_message(
+        self, message: str, icon_path: str | None = None
+    ) -> dict[str, Any]:
         """Show a floating message."""
         message_payload = {
             "message": message,
@@ -699,73 +737,79 @@ class WebOsClient:
 
         return await self.request(ep.SHOW_MESSAGE, message_payload)
 
-    async def get_power_state(self):
+    async def get_power_state(self) -> dict[str, Any]:
         """Get current power state."""
         return await self.request(ep.GET_POWER_STATE)
 
-    async def subscribe_power_state(self, callback):
+    async def subscribe_power_state(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to current power state."""
         return await self.subscribe(callback, ep.GET_POWER_STATE)
 
     # Apps
-    async def get_apps(self):
+    async def get_apps(self) -> dict[str, Any] | None:
         """Return all apps."""
         res = await self.request(ep.GET_APPS)
         return res.get("launchPoints")
 
-    async def subscribe_apps(self, callback):
+    async def subscribe_apps(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to changes in available apps."""
         return await self.subscribe(callback, ep.GET_APPS)
 
-    async def get_apps_all(self):
+    async def get_apps_all(self) -> dict[str, Any] | None:
         """Return all apps, including hidden ones."""
         res = await self.request(ep.GET_APPS_ALL)
         return res.get("apps")
 
-    async def get_current_app(self):
+    async def get_current_app(self) -> dict[str, Any] | None:
         """Get the current app id."""
         res = await self.request(ep.GET_CURRENT_APP_INFO)
         return res.get("appId")
 
-    async def subscribe_current_app(self, callback):
+    async def subscribe_current_app(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to changes in the current app id."""
 
-        async def current_app(payload):
+        async def current_app(payload: dict[str, Any]) -> None:
             await callback(payload.get("appId"))
 
         return await self.subscribe(current_app, ep.GET_CURRENT_APP_INFO)
 
-    async def launch_app(self, app):
+    async def launch_app(self, app: str) -> dict[str, Any]:
         """Launch an app."""
         return await self.request(ep.LAUNCH, {"id": app})
 
-    async def launch_app_with_params(self, app, params):
+    async def launch_app_with_params(
+        self, app: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
         """Launch an app with parameters."""
         return await self.request(ep.LAUNCH, {"id": app, "params": params})
 
-    async def launch_app_with_content_id(self, app, content_id):
+    async def launch_app_with_content_id(
+        self, app: str, content_id: str
+    ) -> dict[str, Any]:
         """Launch an app with contentId."""
         return await self.request(ep.LAUNCH, {"id": app, "contentId": content_id})
 
-    async def close_app(self, app):
+    async def close_app(self, app: str) -> dict[str, Any]:
         """Close the current app."""
         return await self.request(ep.LAUNCHER_CLOSE, {"id": app})
 
     # Services
-    async def get_services(self):
+    async def get_services(self) -> dict[str, Any] | None:
         """Get all services."""
         res = await self.request(ep.GET_SERVICES)
         return res.get("services")
 
-    async def get_software_info(self):
+    async def get_software_info(self) -> dict[str, Any]:
         """Return the current software status."""
         return await self.request(ep.GET_SOFTWARE_INFO)
 
-    async def get_system_info(self):
+    async def get_system_info(
+        self,
+    ) -> dict[str, Any]:
         """Return the system information."""
         return await self.request(ep.GET_SYSTEM_INFO)
 
-    async def power_off(self):
+    async def power_off(self) -> None:
         """Power off TV.
 
         Protect against turning tv back on if it is off.
@@ -777,11 +821,11 @@ class WebOsClient:
         # response is unreliable, so don't wait for one,
         await self.command("request", ep.POWER_OFF)
 
-    async def power_on(self):
+    async def power_on(self) -> dict[str, Any]:
         """Play media."""
         return await self.request(ep.POWER_ON)
 
-    async def turn_screen_off(self, webos_ver=""):
+    async def turn_screen_off(self, webos_ver: str = "") -> dict[str, Any]:
         """Turn TV Screen off."""
         ep_name = f"TURN_OFF_SCREEN_WO{webos_ver}" if webos_ver else "TURN_OFF_SCREEN"
 
@@ -790,7 +834,7 @@ class WebOsClient:
 
         return await self.request(getattr(ep, ep_name), {"standbyMode": "active"})
 
-    async def turn_screen_on(self, webos_ver=""):
+    async def turn_screen_on(self, webos_ver: str = "") -> dict[str, Any]:
         """Turn TV Screen on."""
         ep_name = f"TURN_ON_SCREEN_WO{webos_ver}" if webos_ver else "TURN_ON_SCREEN"
 
@@ -800,85 +844,85 @@ class WebOsClient:
         return await self.request(getattr(ep, ep_name), {"standbyMode": "active"})
 
     # 3D Mode
-    async def turn_3d_on(self):
+    async def turn_3d_on(self) -> dict[str, Any]:
         """Turn 3D on."""
         return await self.request(ep.SET_3D_ON)
 
-    async def turn_3d_off(self):
+    async def turn_3d_off(self) -> dict[str, Any]:
         """Turn 3D off."""
         return await self.request(ep.SET_3D_OFF)
 
     # Inputs
-    async def get_inputs(self):
+    async def get_inputs(self) -> dict[str, Any] | None:
         """Get all inputs."""
         res = await self.request(ep.GET_INPUTS)
         return res.get("devices")
 
-    async def subscribe_inputs(self, callback):
+    async def subscribe_inputs(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to changes in available inputs."""
 
-        async def inputs(payload):
+        async def inputs(payload: dict[str, Any]) -> None:
             await callback(payload.get("devices"))
 
         return await self.subscribe(inputs, ep.GET_INPUTS)
 
-    async def get_input(self):
+    async def get_input(self) -> dict[str, Any] | None:
         """Get current input."""
         return await self.get_current_app()
 
-    async def set_input(self, input_id):
+    async def set_input(self, input_id: str) -> dict[str, Any]:
         """Set the current input."""
         return await self.request(ep.SET_INPUT, {"inputId": input_id})
 
     # Audio
-    async def get_audio_status(self):
+    async def get_audio_status(self) -> dict[str, Any]:
         """Get the current audio status."""
         return await self.request(ep.GET_AUDIO_STATUS)
 
-    async def get_muted(self):
+    async def get_muted(self) -> bool | None:
         """Get mute status."""
         status = await self.get_audio_status()
         return status.get("mute")
 
-    async def subscribe_muted(self, callback):
+    async def subscribe_muted(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to changes in the current mute status."""
 
-        async def muted(payload):
+        async def muted(payload: dict[str, Any]) -> None:
             await callback(payload.get("mute"))
 
         return await self.subscribe(muted, ep.GET_AUDIO_STATUS)
 
-    async def set_mute(self, mute):
+    async def set_mute(self, mute: bool) -> dict[str, Any]:  # noqa: FBT001
         """Set mute."""
         return await self.request(ep.SET_MUTE, {"mute": mute})
 
-    async def get_volume(self):
+    async def get_volume(self) -> int | None:
         """Get the current volume."""
         res = await self.request(ep.GET_VOLUME)
-        return res.get("volumeStatus", res).get("volume")
+        return res.get("volumeStatus", res).get("volume")  # type: ignore[no-any-return]
 
-    async def subscribe_volume(self, callback):
+    async def subscribe_volume(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to changes in the current volume."""
 
-        async def volume(payload):
+        async def volume(payload: dict[str, Any]) -> None:
             await callback(payload.get("volumeStatus", payload).get("volume"))
 
         return await self.subscribe(volume, ep.GET_VOLUME)
 
-    async def set_volume(self, volume):
+    async def set_volume(self, volume: int) -> dict[str, Any]:
         """Set volume."""
         volume = max(0, volume)
         return await self.request(ep.SET_VOLUME, {"volume": volume})
 
-    async def volume_up(self):
+    async def volume_up(self) -> dict[str, Any]:
         """Volume up."""
         return await self._volume_step(ep.VOLUME_UP)
 
-    async def volume_down(self):
+    async def volume_down(self) -> dict[str, Any]:
         """Volume down."""
         return await self._volume_step(ep.VOLUME_DOWN)
 
-    async def _volume_step(self, endpoint):
+    async def _volume_step(self, endpoint: str) -> dict[str, Any]:
         """Set volume with step delay.
 
         Set volume and conditionally sleep if a consecutive volume step
@@ -896,98 +940,100 @@ class WebOsClient:
             return await self.request(endpoint)
 
     # TV Channel
-    async def channel_up(self):
+    async def channel_up(self) -> dict[str, Any]:
         """Channel up."""
         return await self.request(ep.TV_CHANNEL_UP)
 
-    async def channel_down(self):
+    async def channel_down(self) -> dict[str, Any]:
         """Channel down."""
         return await self.request(ep.TV_CHANNEL_DOWN)
 
-    async def get_channels(self):
+    async def get_channels(self) -> list[dict[str, Any]] | None:
         """Get list of tv channels."""
         res = await self.request(ep.GET_TV_CHANNELS)
         return res.get("channelList")
 
-    async def subscribe_channels(self, callback):
+    async def subscribe_channels(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to list of tv channels."""
 
-        async def channels(payload):
-            await callback(payload.get("channelList"))
+        async def channels(payload: dict[str, Any]) -> None:
+            await callback(payload.get("channelList", []))
 
         return await self.subscribe(channels, ep.GET_TV_CHANNELS)
 
-    async def get_current_channel(self):
+    async def get_current_channel(self) -> dict[str, Any]:
         """Get the current tv channel."""
         return await self.request(ep.GET_CURRENT_CHANNEL)
 
-    async def subscribe_current_channel(self, callback):
+    async def subscribe_current_channel(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to changes in the current tv channel."""
         return await self.subscribe(callback, ep.GET_CURRENT_CHANNEL)
 
-    async def get_channel_info(self):
+    async def get_channel_info(self) -> dict[str, Any]:
         """Get the current channel info."""
         return await self.request(ep.GET_CHANNEL_INFO)
 
-    async def subscribe_channel_info(self, callback):
+    async def subscribe_channel_info(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to current channel info."""
         return await self.subscribe(callback, ep.GET_CHANNEL_INFO)
 
-    async def set_channel(self, channel):
+    async def set_channel(self, channel: str) -> dict[str, Any]:
         """Set the current channel."""
         return await self.request(ep.SET_CHANNEL, {"channelId": channel})
 
-    async def get_sound_output(self):
+    async def get_sound_output(self) -> dict[str, Any] | None:
         """Get the current audio output."""
         res = await self.request(ep.GET_SOUND_OUTPUT)
         return res.get("soundOutput")
 
-    async def subscribe_sound_output(self, callback):
+    async def subscribe_sound_output(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to changes in current audio output."""
 
-        async def sound_output(payload):
+        async def sound_output(payload: dict[str, Any]) -> None:
             await callback(payload.get("soundOutput"))
 
         return await self.subscribe(sound_output, ep.GET_SOUND_OUTPUT)
 
-    async def change_sound_output(self, output):
+    async def change_sound_output(self, output: str) -> dict[str, Any]:
         """Change current audio output."""
         return await self.request(ep.CHANGE_SOUND_OUTPUT, {"output": output})
 
     # Media control
-    async def play(self):
+    async def play(self) -> dict[str, Any]:
         """Play media."""
         return await self.request(ep.MEDIA_PLAY)
 
-    async def pause(self):
+    async def pause(self) -> dict[str, Any]:
         """Pause media."""
         return await self.request(ep.MEDIA_PAUSE)
 
-    async def stop(self):
+    async def stop(self) -> dict[str, Any]:
         """Stop media."""
         return await self.request(ep.MEDIA_STOP)
 
-    async def close(self):
+    async def close(self) -> dict[str, Any]:
         """Close media."""
         return await self.request(ep.MEDIA_CLOSE)
 
-    async def rewind(self):
+    async def rewind(self) -> dict[str, Any]:
         """Rewind media."""
         return await self.request(ep.MEDIA_REWIND)
 
-    async def fast_forward(self):
+    async def fast_forward(self) -> dict[str, Any]:
         """Fast Forward media."""
         return await self.request(ep.MEDIA_FAST_FORWARD)
 
-    async def get_media_foreground_app(self):
+    async def get_media_foreground_app(self) -> list[dict[str, Any]]:
         """Get media player state."""
         res = await self.request(ep.GET_MEDIA_FOREGROUND_APP_INFO)
-        return res.get("foregroundAppInfo")
+        return cast(list, res.get("foregroundAppInfo", []))
 
-    async def subscribe_media_foreground_app(self, callback):
+    async def subscribe_media_foreground_app(
+        self, callback: Callable
+    ) -> dict[str, bool]:
         """Subscribe to changes in media player state."""
 
-        async def current_media(payload):
-            await callback(payload)
+        async def current_media(payload: dict[str, Any]) -> None:
+            await callback(payload.get("foregroundAppInfo", []))
 
         return await self.subscribe(current_media, ep.GET_MEDIA_FOREGROUND_APP_INFO)
