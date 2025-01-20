@@ -12,11 +12,14 @@ from asyncio.queues import Queue
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import timedelta
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-import websockets
-from websockets.client import WebSocketClientProtocol
-from websockets.client import connect as ws_connect
+from aiohttp import (
+    ClientConnectionError,
+    ClientSession,
+    ClientWebSocketResponse,
+    WSMsgType,
+)
 
 from . import endpoints as ep
 from .exceptions import (
@@ -42,21 +45,22 @@ class WebOsClient:
         self,
         host: str,
         client_key: str | None = None,
-        timeout_connect: float = 2,
-        ping_interval: float = 5,
-        ping_timeout: float = 20,
+        connect_timeout: float = 2,
+        heartbeat: float = 5,
+        client_session: ClientSession | None = None,
     ) -> None:
         """Initialize the client."""
         self.host = host
         self.client_key = client_key
         self.command_count: int = 0
-        self.timeout_connect = timeout_connect
-        self.ping_interval = ping_interval
-        self.ping_timeout = ping_timeout
+        self.timeout_connect = connect_timeout
+        self.heartbeat = heartbeat
+        self.client_session = client_session
+        self.created_client_session = False
         self.connect_task: Task | None = None
         self.connect_result: Future[bool] | None = None
-        self.connection: WebSocketClientProtocol | None = None
-        self.input_connection: WebSocketClientProtocol | None = None
+        self.connection: ClientWebSocketResponse | None = None
+        self.input_connection: ClientWebSocketResponse | None = None
         self.callbacks: dict[int, Callable] = {}
         self.futures: dict[int, Future[dict[str, Any]]] = {}
         self._power_state: dict[str, Any] = {}
@@ -114,31 +118,45 @@ class WebOsClient:
 
     async def _ws_connect(
         self, uri: str, ssl_context: ssl.SSLContext | None
-    ) -> WebSocketClientProtocol:
+    ) -> ClientWebSocketResponse:
         """Create websocket connection."""
         _LOGGER.debug("connect(%s): uri: %s", self.host, uri)
-        return await ws_connect(
-            uri,
-            ping_interval=self.ping_interval,
-            ping_timeout=self.ping_timeout,
-            open_timeout=self.timeout_connect,
-            close_timeout=self.timeout_connect,
-            max_size=None,
-            ssl=ssl_context,
-        )
+
+        if TYPE_CHECKING:
+            assert self.client_session is not None
+
+        async with asyncio.timeout(self.timeout_connect):
+            return await self.client_session.ws_connect(
+                uri, heartbeat=self.heartbeat, ssl=ssl_context
+            )
+
+    async def close_client_session(self) -> None:
+        """Close client session if we created it."""
+        if TYPE_CHECKING:
+            assert self.client_session is not None
+
+        await self.client_session.close()
+        self.created_client_session = False
+        self.client_session = None
 
     async def connect_handler(self, res: Future) -> None:
         """Handle connection for webOS TV."""
         handler_tasks: set[Task] = set()
-        main_ws: WebSocketClientProtocol | None = None
-        input_ws: WebSocketClientProtocol | None = None
+        main_ws: ClientWebSocketResponse | None = None
+        input_ws: ClientWebSocketResponse | None = None
         ssl_context: ssl.SSLContext | None = None
+
         try:
+            # Create a new client session if not provided
+            if self.client_session is None:
+                self.client_session = ClientSession()
+                self.created_client_session = True
+
             try:
                 uri = f"ws://{self.host}:{WS_PORT}"
                 main_ws = await self._ws_connect(uri, ssl_context)
-            except websockets.exceptions.InvalidMessage:
-                # InvalidMessage is raised when firmware enforce using ssl
+            except ClientConnectionError:
+                # ClientConnectionError is raised when firmware enforce using ssl
                 # webOS uses self-signed certificates, thus we need to use an empty
                 # SSLContext to bypass validation errors.
                 ssl_context = ssl.SSLContext()
@@ -147,10 +165,9 @@ class WebOsClient:
 
             # send hello
             _LOGGER.debug("send(%s): hello", self.host)
-            await main_ws.send(json.dumps({"id": "hello", "type": "hello"}))
-            raw_response = await main_ws.recv()
-            _LOGGER.debug("recv(%s): %s", self.host, raw_response)
-            response = json.loads(raw_response)
+            await main_ws.send_json({"id": "hello", "type": "hello"})
+            response = await main_ws.receive_json()
+            _LOGGER.debug("recv(%s): %s", self.host, response)
 
             if response["type"] == "hello":
                 self._hello_info = response["payload"]
@@ -159,18 +176,16 @@ class WebOsClient:
 
             # send registration
             _LOGGER.debug("send(%s): registration", self.host)
-            await main_ws.send(json.dumps(self.registration_msg()))
-            raw_response = await main_ws.recv()
+            await main_ws.send_json(self.registration_msg())
+            response = await main_ws.receive_json()
             _LOGGER.debug("recv(%s): registration", self.host)
-            response = json.loads(raw_response)
 
             if (
                 response["type"] == "response"
                 and response["payload"]["pairingType"] == "PROMPT"
             ):
-                raw_response = await main_ws.recv()
+                response = await main_ws.receive_json()
                 _LOGGER.debug("recv(%s): pairing", self.host)
-                response = json.loads(raw_response)
                 _LOGGER.debug(
                     "pairing(%s): type: %s, error: %s",
                     self.host,
@@ -202,7 +217,6 @@ class WebOsClient:
             inputsockpath = sockres["socketPath"]
             input_ws = await self._ws_connect(inputsockpath, ssl_context)
 
-            handler_tasks.add(asyncio.create_task(input_ws.wait_closed()))
             self.input_connection = input_ws
 
             # set static state and subscribe to state updates
@@ -259,6 +273,8 @@ class WebOsClient:
                 closeout.add(asyncio.create_task(main_ws.close()))
             if input_ws is not None:
                 closeout.add(asyncio.create_task(input_ws.close()))
+            if self.created_client_session:
+                closeout.add(asyncio.create_task(self.close_client_session()))
 
             self.connection = None
             self.input_connection = None
@@ -307,7 +323,7 @@ class WebOsClient:
 
     async def consumer_handler(
         self,
-        web_socket: WebSocketClientProtocol,
+        web_socket: ClientWebSocketResponse,
         callbacks: dict[int, Callable],
         futures: dict[int, Future],
     ) -> None:
@@ -319,7 +335,10 @@ class WebOsClient:
             async for raw_msg in web_socket:
                 if callbacks or futures:
                     _LOGGER.debug("recv(%s): %s", self.host, raw_msg)
-                    msg = json.loads(raw_msg)
+                    if raw_msg.type is not WSMsgType.TEXT:
+                        break
+
+                    msg = json.loads(raw_msg.data)
                     uid = msg.get("id")
                     callback = self.callbacks.get(uid)
                     future = self.futures.get(uid)
@@ -334,11 +353,7 @@ class WebOsClient:
                     elif future is not None and not future.done():
                         self.futures[uid].set_result(msg)
 
-        except (
-            asyncio.CancelledError,
-            websockets.exceptions.ConnectionClosedError,
-            websockets.exceptions.ConnectionClosedOK,
-        ):
+        except asyncio.CancelledError:
             pass
         finally:
             for task in callback_tasks.values():
@@ -617,7 +632,7 @@ class WebOsClient:
             raise WebOsTvCommandError("Not connected, can't execute command.")
 
         _LOGGER.debug("send(%s): %s", self.host, message)
-        await self.connection.send(json.dumps(message))
+        await self.connection.send_json(message)
 
     async def request(
         self,

@@ -5,16 +5,14 @@ import signal
 from contextlib import suppress
 from datetime import UTC, datetime
 
-from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
+from aiohttp import ServerDisconnectedError
 
 from aiowebostv import WebOsClient
 from aiowebostv.exceptions import WebOsTvCommandError
 
 WEBOSTV_EXCEPTIONS = (
-    OSError,
-    ConnectionClosed,
-    ConnectionClosedOK,
-    ConnectionRefusedError,
+    ServerDisconnectedError,
+    ConnectionResetError,
     WebOsTvCommandError,
     asyncio.TimeoutError,
     asyncio.CancelledError,
