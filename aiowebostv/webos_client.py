@@ -111,9 +111,7 @@ class WebOsClient:
         handshake["payload"]["client-key"] = self.client_key  # type: ignore[index]
         return handshake
 
-    async def _ws_connect(
-        self, uri: str, heartbeat: float | None
-    ) -> ClientWebSocketResponse:
+    async def _ws_connect(self, uri: str) -> ClientWebSocketResponse:
         """Create websocket connection."""
         _LOGGER.debug("connect(%s): uri: %s", self.host, uri)
 
@@ -123,7 +121,7 @@ class WebOsClient:
         # webOS uses self-signed certificates, disable SSL certificate validation
         async with asyncio.timeout(self.timeout_connect):
             return await self.client_session.ws_connect(
-                uri, heartbeat=heartbeat, ssl=False
+                uri, heartbeat=self.heartbeat, ssl=False
             )
 
     async def close_client_session(self) -> None:
@@ -149,12 +147,12 @@ class WebOsClient:
 
             try:
                 uri = f"ws://{self.host}:{WS_PORT}"
-                main_ws = await self._ws_connect(uri, self.heartbeat)
+                main_ws = await self._ws_connect(uri)
             # ClientConnectionError is raised when firmware reject WS_PORT
             # WSServerHandshakeError is raised when firmware enforce using ssl
             except (aiohttp.ClientConnectionError, aiohttp.WSServerHandshakeError):
                 uri = f"wss://{self.host}:{WSS_PORT}"
-                main_ws = await self._ws_connect(uri, self.heartbeat)
+                main_ws = await self._ws_connect(uri)
 
             # send hello
             _LOGGER.debug("send(%s): hello", self.host)
@@ -205,11 +203,14 @@ class WebOsClient:
 
             # open additional connection needed to send button commands
             # the url is dynamically generated and returned from the ep.INPUT_SOCKET
-            # endpoint on the main connection, disable heartbeat for input connection
+            # endpoint on the main connection
+            # create an empty consumer handler to keep ping/pong alive
             sockres = await self.request(ep.INPUT_SOCKET)
             inputsockpath = sockres["socketPath"]
-            input_ws = await self._ws_connect(inputsockpath, heartbeat=None)
-
+            input_ws = await self._ws_connect(inputsockpath)
+            handler_tasks.add(
+                asyncio.create_task(self.consumer_handler(input_ws, None, None))
+            )
             self.input_connection = input_ws
 
             # set static state and subscribe to state updates
@@ -317,8 +318,8 @@ class WebOsClient:
     async def consumer_handler(
         self,
         web_socket: ClientWebSocketResponse,
-        callbacks: dict[int, Callable],
-        futures: dict[int, Future],
+        callbacks: dict[int, Callable] | None,
+        futures: dict[int, Future] | None,
     ) -> None:
         """Callbacks consumer handler."""
         callback_queues: dict[int, Queue[dict[str, Any]]] = {}
