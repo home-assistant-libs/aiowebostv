@@ -6,7 +6,6 @@ import copy
 import json
 import logging
 import os
-import ssl
 from asyncio import Future, Task
 from asyncio.queues import Queue
 from collections.abc import Callable
@@ -116,18 +115,17 @@ class WebOsClient:
         handshake["payload"]["client-key"] = self.client_key  # type: ignore[index]
         return handshake
 
-    async def _ws_connect(
-        self, uri: str, ssl_context: ssl.SSLContext | None
-    ) -> ClientWebSocketResponse:
+    async def _ws_connect(self, uri: str) -> ClientWebSocketResponse:
         """Create websocket connection."""
         _LOGGER.debug("connect(%s): uri: %s", self.host, uri)
 
         if TYPE_CHECKING:
             assert self.client_session is not None
 
+        # webOS uses self-signed certificates, disable SSL certificate validation
         async with asyncio.timeout(self.timeout_connect):
             return await self.client_session.ws_connect(
-                uri, heartbeat=self.heartbeat, ssl=ssl_context
+                uri, heartbeat=self.heartbeat, ssl=False
             )
 
     async def close_client_session(self) -> None:
@@ -144,7 +142,6 @@ class WebOsClient:
         handler_tasks: set[Task] = set()
         main_ws: ClientWebSocketResponse | None = None
         input_ws: ClientWebSocketResponse | None = None
-        ssl_context: ssl.SSLContext | None = None
 
         try:
             # Create a new client session if not provided
@@ -154,14 +151,11 @@ class WebOsClient:
 
             try:
                 uri = f"ws://{self.host}:{WS_PORT}"
-                main_ws = await self._ws_connect(uri, ssl_context)
+                main_ws = await self._ws_connect(uri)
             except ClientConnectionError:
                 # ClientConnectionError is raised when firmware enforce using ssl
-                # webOS uses self-signed certificates, thus we need to use an empty
-                # SSLContext to bypass validation errors.
-                ssl_context = ssl.SSLContext()
                 uri = f"wss://{self.host}:{WSS_PORT}"
-                main_ws = await self._ws_connect(uri, ssl_context)
+                main_ws = await self._ws_connect(uri)
 
             # send hello
             _LOGGER.debug("send(%s): hello", self.host)
@@ -215,7 +209,7 @@ class WebOsClient:
             # endpoint on the main connection
             sockres = await self.request(ep.INPUT_SOCKET)
             inputsockpath = sockres["socketPath"]
-            input_ws = await self._ws_connect(inputsockpath, ssl_context)
+            input_ws = await self._ws_connect(inputsockpath)
 
             self.input_connection = input_ws
 
@@ -703,7 +697,7 @@ class WebOsClient:
             raise WebOsTvCommandError("Couldn't execute input command.")
 
         _LOGGER.debug("send(%s): %s", self.host, message)
-        await self.input_connection.send(message)
+        await self.input_connection.send_str(message)
 
     # high level request handling
 
