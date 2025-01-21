@@ -111,7 +111,9 @@ class WebOsClient:
         handshake["payload"]["client-key"] = self.client_key  # type: ignore[index]
         return handshake
 
-    async def _ws_connect(self, uri: str) -> ClientWebSocketResponse:
+    async def _ws_connect(
+        self, uri: str, heartbeat: float | None
+    ) -> ClientWebSocketResponse:
         """Create websocket connection."""
         _LOGGER.debug("connect(%s): uri: %s", self.host, uri)
 
@@ -121,7 +123,7 @@ class WebOsClient:
         # webOS uses self-signed certificates, disable SSL certificate validation
         async with asyncio.timeout(self.timeout_connect):
             return await self.client_session.ws_connect(
-                uri, heartbeat=self.heartbeat, ssl=False
+                uri, heartbeat=heartbeat, ssl=False
             )
 
     async def close_client_session(self) -> None:
@@ -147,12 +149,12 @@ class WebOsClient:
 
             try:
                 uri = f"ws://{self.host}:{WS_PORT}"
-                main_ws = await self._ws_connect(uri)
+                main_ws = await self._ws_connect(uri, self.heartbeat)
             # ClientConnectionError is raised when firmware reject WS_PORT
             # WSServerHandshakeError is raised when firmware enforce using ssl
             except (aiohttp.ClientConnectionError, aiohttp.WSServerHandshakeError):
                 uri = f"wss://{self.host}:{WSS_PORT}"
-                main_ws = await self._ws_connect(uri)
+                main_ws = await self._ws_connect(uri, self.heartbeat)
 
             # send hello
             _LOGGER.debug("send(%s): hello", self.host)
@@ -203,10 +205,10 @@ class WebOsClient:
 
             # open additional connection needed to send button commands
             # the url is dynamically generated and returned from the ep.INPUT_SOCKET
-            # endpoint on the main connection
+            # endpoint on the main connection, disable heartbeat for input connection
             sockres = await self.request(ep.INPUT_SOCKET)
             inputsockpath = sockres["socketPath"]
-            input_ws = await self._ws_connect(inputsockpath)
+            input_ws = await self._ws_connect(inputsockpath, heartbeat=None)
 
             self.input_connection = input_ws
 
@@ -324,10 +326,11 @@ class WebOsClient:
 
         try:
             async for raw_msg in web_socket:
+                if raw_msg.type is not WSMsgType.TEXT:
+                    break
+
                 if callbacks or futures:
                     _LOGGER.debug("recv(%s): %s", self.host, raw_msg)
-                    if raw_msg.type is not WSMsgType.TEXT:
-                        break
 
                     msg = json.loads(raw_msg.data)
                     uid = msg.get("id")
@@ -344,8 +347,6 @@ class WebOsClient:
                     elif future is not None and not future.done():
                         self.futures[uid].set_result(msg)
 
-        except asyncio.CancelledError:
-            pass
         finally:
             for task in callback_tasks.values():
                 if not task.done():
