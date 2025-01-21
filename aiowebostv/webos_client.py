@@ -332,7 +332,6 @@ class WebOsClient:
 
                 if callbacks or futures:
                     _LOGGER.debug("recv(%s): %s", self.host, raw_msg)
-
                     msg = json.loads(raw_msg.data)
                     uid = msg.get("id")
                     callback = self.callbacks.get(uid)
