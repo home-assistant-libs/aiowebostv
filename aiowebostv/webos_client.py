@@ -13,12 +13,8 @@ from contextlib import suppress
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, cast
 
-from aiohttp import (
-    ClientConnectionError,
-    ClientSession,
-    ClientWebSocketResponse,
-    WSMsgType,
-)
+import aiohttp
+from aiohttp import ClientSession, ClientWebSocketResponse, WSMsgType
 
 from . import endpoints as ep
 from .exceptions import (
@@ -152,8 +148,9 @@ class WebOsClient:
             try:
                 uri = f"ws://{self.host}:{WS_PORT}"
                 main_ws = await self._ws_connect(uri)
-            except ClientConnectionError:
-                # ClientConnectionError is raised when firmware enforce using ssl
+            # ClientConnectionError is raised when firmware reject WS_PORT
+            # WSServerHandshakeError is raised when firmware enforce using ssl
+            except (aiohttp.ClientConnectionError, aiohttp.WSServerHandshakeError):
                 uri = f"wss://{self.host}:{WSS_PORT}"
                 main_ws = await self._ws_connect(uri)
 
@@ -166,7 +163,7 @@ class WebOsClient:
             if response["type"] == "hello":
                 self._hello_info = response["payload"]
             else:
-                raise WebOsTvCommandError(f"Invalid request type {response}")
+                raise WebOsTvCommandError(f"Invalid response type {response}")
 
             # send registration
             _LOGGER.debug("send(%s): registration", self.host)
