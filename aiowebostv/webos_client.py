@@ -249,7 +249,10 @@ class WebOsClient:
             await asyncio.wait(handler_tasks, return_when=asyncio.FIRST_COMPLETED)
 
         except Exception as ex:  # pylint: disable=broad-except
-            _LOGGER.debug("exception(%s): %r", self.host, ex, exc_info=True)
+            if isinstance(ex, TimeoutError):
+                _LOGGER.debug("timeout(%s): connection", self.host)
+            else:
+                _LOGGER.debug("exception(%s): %r", self.host, ex, exc_info=True)
             if not res.done():
                 res.set_exception(ex)
         finally:
@@ -327,11 +330,11 @@ class WebOsClient:
 
         try:
             async for raw_msg in web_socket:
+                _LOGGER.debug("recv(%s): %s", self.host, raw_msg)
                 if raw_msg.type is not WSMsgType.TEXT:
                     break
 
                 if callbacks or futures:
-                    _LOGGER.debug("recv(%s): %s", self.host, raw_msg)
                     msg = json.loads(raw_msg.data)
                     uid = msg.get("id")
                     callback = self.callbacks.get(uid)
