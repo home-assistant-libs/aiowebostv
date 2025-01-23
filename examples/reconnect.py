@@ -5,19 +5,18 @@ import signal
 from contextlib import suppress
 from datetime import UTC, datetime
 
-from websockets.exceptions import ConnectionClosed, ConnectionClosedOK
+import aiohttp
 
 from aiowebostv import WebOsClient
 from aiowebostv.exceptions import WebOsTvCommandError
 
 WEBOSTV_EXCEPTIONS = (
-    OSError,
-    ConnectionClosed,
-    ConnectionClosedOK,
-    ConnectionRefusedError,
+    ConnectionResetError,
     WebOsTvCommandError,
-    asyncio.TimeoutError,
+    aiohttp.ClientConnectorError,
+    aiohttp.ServerDisconnectedError,
     asyncio.CancelledError,
+    asyncio.TimeoutError,
 )
 
 HOST = "192.168.1.39"

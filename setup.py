@@ -22,7 +22,7 @@ setup(
     packages=["aiowebostv"],
     python_requires=">=3.11",
     package_data={"aiowebostv": ["py.typed"]},
-    install_requires=["websockets>=10.3"],
+    install_requires=["aiohttp>=3.11"],
     include_package_data=True,
     zip_safe=False,
     classifiers=[
