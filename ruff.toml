@@ -3,24 +3,30 @@ target-version = "py311"
 lint.select = ["ALL"]
 
 lint.ignore = [
-    "BLE001",   # Do not catch blind exception: `Exception`
-    "C901",     # is too complex
     "COM812",   # Trailing comma missing (conflicts with formatter)
     "D203",     # 1 blank line required before class docstring (conflicts with `no-blank-line-before-class` (D211))
     "D213",     # Multi-line docstring summary should start at the second line (conflicts with multi-line-summary-first-line` (D212))
+]
+
+[lint.per-file-ignores]
+"aiowebostv/base_client.py" = [
+    "BLE001",   # Do not catch blind exception: `Exception`
+    "C901",     # is too complex
     "EM101",    # Exception must not use a string literal, assign to variable first
     "EM102",    # Exception must not use an f-string literal, assign to variable first
-    "ISC001",   # Single line implicit string concatenation
     "PLR0912",  # Too many branches
     "PLR0915",  # Too many statements
-    "PTH122",   # `os.path.splitext()` should be replaced by `Path.suffix`, `Path.stem`, and `Path.parent`
-    "PTH123",   # `open()` should be replaced by `Path.open()`
     "TRY003",   # Avoid specifying long messages outside the exception class
     "TRY301",   # Abstract `raise` to an inner function
 ]
 
+"aiowebostv/webos_client.py" = [
+    "EM102",    # Exception must not use an f-string literal, assign to variable first
+    "PTH122",   # `os.path.splitext()` should be replaced by `Path.suffix`, `Path.stem`, and `Path.parent`
+    "PTH123",   # `open()` should be replaced by `Path.open()`
+    "TRY003",   # Avoid specifying long messages outside the exception class
+]
 
-[lint.per-file-ignores]
 "examples/*" = [
     "T201",      # `print` found
 ]
