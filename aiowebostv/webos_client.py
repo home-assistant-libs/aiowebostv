@@ -678,16 +678,12 @@ class WebOsClient:
 
         return payload
 
-    async def subscribe(
-        self, callback: Callable, uri: str, payload: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """Subscribe to updates.
+    async def create_subscription_handler(self, uid: int, callback: Callable) -> None:
+        """Create a subscription handler for a given uid.
 
-        Subsciption use a fixed uid so we need to pre-create a future,
-        Create a queue to store the messages and a task to handle the messages.
+        Create a queue to store the messages, a task to handle the messages
+        and a future to signal first subscription update processed.
         """
-        uid = self.command_count
-        self.command_count += 1
         self.futures[uid] = future = self._loop.create_future()
         self.callbacks[uid] = callback
         queue: Queue[dict[str, Any]] = asyncio.Queue()
@@ -695,19 +691,35 @@ class WebOsClient:
         self.callback_tasks[uid] = asyncio.create_task(
             self.callback_handler(queue, callback, future)
         )
+
+    async def delete_subscription_handler(self, uid: int) -> None:
+        """Delete a subscription handler for a given uid."""
+        del self.callbacks[uid]
+        task = self.callback_tasks.pop(uid)
+        if not task.done():
+            task.cancel()
+        while not task.done():
+            with suppress(asyncio.CancelledError):
+                await asyncio.shield(task)
+        del self.callback_queues[uid]
+
+    async def subscribe(
+        self, callback: Callable, uri: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Subscribe to updates.
+
+        Subsciption use a fixed uid, pre-create a future and a handler.
+        """
+        uid = self.command_count
+        self.command_count += 1
+        await self.create_subscription_handler(uid, callback)
+
         try:
             return await self.request(
                 uri, payload=payload, cmd_type="subscribe", uid=uid
             )
         except Exception:
-            del self.callbacks[uid]
-            task = self.callback_tasks.pop(uid)
-            if not task.done():
-                task.cancel()
-            while not task.done():
-                with suppress(asyncio.CancelledError):
-                    await asyncio.shield(task)
-            del self.callback_queues[uid]
+            await self.delete_subscription_handler(uid)
             raise
 
     async def input_command(self, message: str) -> None:
