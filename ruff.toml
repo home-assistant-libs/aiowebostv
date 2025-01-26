@@ -13,8 +13,6 @@ lint.ignore = [
     "ISC001",   # Single line implicit string concatenation
     "PLR0912",  # Too many branches
     "PLR0915",  # Too many statements
-    "PTH122",   # `os.path.splitext()` should be replaced by `Path.suffix`, `Path.stem`, and `Path.parent`
-    "PTH123",   # `open()` should be replaced by `Path.open()`
     "TRY003",   # Avoid specifying long messages outside the exception class
     "TRY301",   # Abstract `raise` to an inner function
 ]
