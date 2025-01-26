@@ -336,17 +336,9 @@ class WebOsClient:
 
         msg = json.loads(data)
         uid = msg.get("id")
-        callback = self.callbacks.get(uid)
-        future = self.futures.get(uid)
-        if callback is not None:
-            if uid not in self.callback_tasks:
-                queue: Queue[dict[str, Any]] = asyncio.Queue()
-                self.callback_queues[uid] = queue
-                self.callback_tasks[uid] = asyncio.create_task(
-                    self.callback_handler(queue, callback, future)
-                )
-            self.callback_queues[uid].put_nowait(msg)
-        elif future is not None and not future.done():
+        if queue := self.callback_queues.get(uid):
+            queue.put_nowait(msg)
+        elif self.futures[uid] is not None:
             self.futures[uid].set_result(msg)
 
     async def consumer_handler(self, web_socket: ClientWebSocketResponse) -> None:
@@ -689,12 +681,24 @@ class WebOsClient:
         uid = self.command_count
         self.command_count += 1
         self.callbacks[uid] = callback
+        queue: Queue[dict[str, Any]] = asyncio.Queue()
+        self.callback_queues[uid] = queue
+        self.callback_tasks[uid] = asyncio.create_task(
+            self.callback_handler(queue, callback, self.futures.get(uid))
+        )
         try:
             return await self.request(
                 uri, payload=payload, cmd_type="subscribe", uid=uid
             )
         except Exception:
             del self.callbacks[uid]
+            task = self.callback_tasks.pop(uid)
+            if not task.done():
+                task.cancel()
+            while not task.done():
+                with suppress(asyncio.CancelledError):
+                    await asyncio.shield(task)
+            del self.callback_queues[uid]
             raise
 
     async def input_command(self, message: str) -> None:
