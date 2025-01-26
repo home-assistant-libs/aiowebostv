@@ -5,12 +5,12 @@ import base64
 import copy
 import json
 import logging
-import os
 from asyncio import Future, Task
 from asyncio.queues import Queue
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
@@ -724,8 +724,9 @@ class WebOsClient:
 
     def read_icon(self, icon_path: str, message_payload: dict[str, Any]) -> None:
         """Read icon & set data in message payload."""
-        message_payload["iconExtension"] = os.path.splitext(icon_path)[1][1:]
-        with open(icon_path, "rb") as icon_file:
+        path = Path(icon_path)
+        message_payload["iconExtension"] = path.suffix[1:]
+        with path.open("rb") as icon_file:
             message_payload["iconData"] = base64.b64encode(icon_file.read()).decode(
                 "ascii"
             )
