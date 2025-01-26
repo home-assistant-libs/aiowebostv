@@ -56,7 +56,6 @@ class WebOsClient:
         self.connect_result: Future[bool] | None = None
         self.connection: ClientWebSocketResponse | None = None
         self.input_connection: ClientWebSocketResponse | None = None
-        self.callbacks: dict[int, Callable] = {}
         self.futures: dict[int, Future[dict[str, Any]]] = {}
         self._power_state: dict[str, Any] = {}
         self._current_app_id: str | None = None
@@ -195,7 +194,8 @@ class WebOsClient:
                 error = "Client key not set, pairing failed."
                 raise WebOsTvPairError(error)
 
-            self.callbacks = {}
+            self.callback_queues = {}
+            self.callback_tasks = {}
             self.futures = {}
 
             handler_tasks.add(asyncio.create_task(self.consumer_handler(main_ws)))
@@ -301,8 +301,6 @@ class WebOsClient:
             self._hello_info = {}
             self._sound_output = None
             self._media_state = []
-            self.callback_queues = {}
-            self.callback_tasks = {}
 
             for callback in self.state_update_callbacks:
                 closeout.add(asyncio.create_task(callback(self)))
@@ -329,11 +327,8 @@ class WebOsClient:
                 if not future.done():
                     future.set_result(msg)
 
-    async def _process_text_message(self, data: str) -> None:
+    def _process_text_message(self, data: str) -> None:
         """Process text message."""
-        if not self.callbacks and not self.futures:
-            return
-
         msg = json.loads(data)
         uid = msg.get("id")
         # if we have a callback for this message, put it in the queue
@@ -350,7 +345,7 @@ class WebOsClient:
             if raw_msg.type is not WSMsgType.TEXT:
                 break
 
-            await self._process_text_message(raw_msg.data)
+            self._process_text_message(raw_msg.data)
 
     async def input_consumer_handler(self, web_socket: ClientWebSocketResponse) -> None:
         """Input consumer handler.
@@ -685,7 +680,6 @@ class WebOsClient:
         and a future to signal first subscription update processed.
         """
         self.futures[uid] = future = self._loop.create_future()
-        self.callbacks[uid] = callback
         queue: Queue[dict[str, Any]] = asyncio.Queue()
         self.callback_queues[uid] = queue
         self.callback_tasks[uid] = asyncio.create_task(
@@ -694,7 +688,6 @@ class WebOsClient:
 
     async def delete_subscription_handler(self, uid: int) -> None:
         """Delete a subscription handler for a given uid."""
-        del self.callbacks[uid]
         task = self.callback_tasks.pop(uid)
         if not task.done():
             task.cancel()
