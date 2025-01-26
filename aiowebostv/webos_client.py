@@ -318,7 +318,7 @@ class WebOsClient:
     async def callback_handler(
         queue: Queue[dict[str, Any]],
         callback: Callable,
-        future: Future[dict[str, Any]] | None,
+        future: Future[dict[str, Any]],
     ) -> None:
         """Handle callbacks."""
         with suppress(asyncio.CancelledError):
@@ -326,7 +326,7 @@ class WebOsClient:
                 msg = await queue.get()
                 payload = msg.get("payload")
                 await callback(payload)
-                if future is not None and not future.done():
+                if not future.done():
                     future.set_result(msg)
 
     async def _process_text_message(self, data: str) -> None:
@@ -336,10 +336,12 @@ class WebOsClient:
 
         msg = json.loads(data)
         uid = msg.get("id")
+        # if we have a callback for this message, put it in the queue
+        # let the callback handle the message and mark the future as done
         if queue := self.callback_queues.get(uid):
             queue.put_nowait(msg)
-        elif self.futures[uid] is not None:
-            self.futures[uid].set_result(msg)
+        elif future := self.futures.get(uid):
+            future.set_result(msg)
 
     async def consumer_handler(self, web_socket: ClientWebSocketResponse) -> None:
         """Callbacks consumer handler."""
@@ -634,8 +636,10 @@ class WebOsClient:
         if uid is None:
             uid = self.command_count
             self.command_count += 1
-        res = self._loop.create_future()
-        self.futures[uid] = res
+            res = self._loop.create_future()
+            self.futures[uid] = res
+        else:
+            res = self.futures[uid]
         try:
             await self.command(cmd_type, uri, payload, uid)
         except (asyncio.CancelledError, WebOsTvCommandError):
@@ -677,14 +681,19 @@ class WebOsClient:
     async def subscribe(
         self, callback: Callable, uri: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Subscribe to updates."""
+        """Subscribe to updates.
+
+        Subsciption use a fixed uid so we need to pre-create a future,
+        Create a queue to store the messages and a task to handle the messages.
+        """
         uid = self.command_count
         self.command_count += 1
+        self.futures[uid] = future = self._loop.create_future()
         self.callbacks[uid] = callback
         queue: Queue[dict[str, Any]] = asyncio.Queue()
         self.callback_queues[uid] = queue
         self.callback_tasks[uid] = asyncio.create_task(
-            self.callback_handler(queue, callback, self.futures.get(uid))
+            self.callback_handler(queue, callback, future)
         )
         try:
             return await self.request(
