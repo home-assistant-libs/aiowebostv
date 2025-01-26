@@ -77,6 +77,8 @@ class WebOsClient:
         self._volume_step_delay: timedelta | None = None
         self._loop = asyncio.get_running_loop()
         self._media_state: list[dict[str, Any]] = []
+        self.callback_queues: dict[int, Queue[dict[str, Any]]] = {}
+        self.callback_tasks: dict[int, Task] = {}
 
     async def connect(self) -> bool:
         """Connect to webOS TV device."""
@@ -196,11 +198,7 @@ class WebOsClient:
             self.callbacks = {}
             self.futures = {}
 
-            handler_tasks.add(
-                asyncio.create_task(
-                    self.consumer_handler(main_ws, self.callbacks, self.futures)
-                )
-            )
+            handler_tasks.add(asyncio.create_task(self.consumer_handler(main_ws)))
             self.connection = main_ws
 
             # open additional connection needed to send button commands
@@ -211,7 +209,7 @@ class WebOsClient:
             inputsockpath = sockres["socketPath"]
             input_ws = await self._ws_connect(inputsockpath)
             handler_tasks.add(
-                asyncio.create_task(self.consumer_handler(input_ws, None, None))
+                asyncio.create_task(self.input_consumer_handler(input_ws))
             )
             self.input_connection = input_ws
 
@@ -258,6 +256,10 @@ class WebOsClient:
             if not res.done():
                 res.set_exception(ex)
         finally:
+            for callback_task in self.callback_tasks.values():
+                if not callback_task.done():
+                    callback_task.cancel()
+
             for task in handler_tasks:
                 if not task.done():
                     task.cancel()
@@ -266,6 +268,11 @@ class WebOsClient:
                 future.cancel()
 
             closeout = set()
+
+            callback_tasks = set(self.callback_tasks.values())
+            if callback_tasks:
+                closeout.update(callback_tasks)
+
             closeout.update(handler_tasks)
 
             if main_ws is not None:
@@ -294,6 +301,8 @@ class WebOsClient:
             self._hello_info = {}
             self._sound_output = None
             self._media_state = []
+            self.callback_queues = {}
+            self.callback_tasks = {}
 
             for callback in self.state_update_callbacks:
                 closeout.add(asyncio.create_task(callback(self)))
@@ -320,51 +329,45 @@ class WebOsClient:
                 if future is not None and not future.done():
                     future.set_result(msg)
 
-    async def consumer_handler(
-        self,
-        web_socket: ClientWebSocketResponse,
-        callbacks: dict[int, Callable] | None,
-        futures: dict[int, Future] | None,
-    ) -> None:
+    async def _process_text_message(self, data: str) -> None:
+        """Process text message."""
+        if not self.callbacks and not self.futures:
+            return
+
+        msg = json.loads(data)
+        uid = msg.get("id")
+        callback = self.callbacks.get(uid)
+        future = self.futures.get(uid)
+        if callback is not None:
+            if uid not in self.callback_tasks:
+                queue: Queue[dict[str, Any]] = asyncio.Queue()
+                self.callback_queues[uid] = queue
+                self.callback_tasks[uid] = asyncio.create_task(
+                    self.callback_handler(queue, callback, future)
+                )
+            self.callback_queues[uid].put_nowait(msg)
+        elif future is not None and not future.done():
+            self.futures[uid].set_result(msg)
+
+    async def consumer_handler(self, web_socket: ClientWebSocketResponse) -> None:
         """Callbacks consumer handler."""
-        callback_queues: dict[int, Queue[dict[str, Any]]] = {}
-        callback_tasks: dict[int, Task] = {}
+        async for raw_msg in web_socket:
+            _LOGGER.debug("recv(%s): %s", self.host, raw_msg)
+            if raw_msg.type is not WSMsgType.TEXT:
+                break
 
-        try:
-            async for raw_msg in web_socket:
-                _LOGGER.debug("recv(%s): %s", self.host, raw_msg)
-                if raw_msg.type is not WSMsgType.TEXT:
-                    break
+            await self._process_text_message(raw_msg.data)
 
-                if callbacks or futures:
-                    msg = json.loads(raw_msg.data)
-                    uid = msg.get("id")
-                    callback = self.callbacks.get(uid)
-                    future = self.futures.get(uid)
-                    if callback is not None:
-                        if uid not in callback_tasks:
-                            queue: Queue[dict[str, Any]] = asyncio.Queue()
-                            callback_queues[uid] = queue
-                            callback_tasks[uid] = asyncio.create_task(
-                                self.callback_handler(queue, callback, future)
-                            )
-                        callback_queues[uid].put_nowait(msg)
-                    elif future is not None and not future.done():
-                        self.futures[uid].set_result(msg)
+    async def input_consumer_handler(self, web_socket: ClientWebSocketResponse) -> None:
+        """Input consumer handler.
 
-        finally:
-            for task in callback_tasks.values():
-                if not task.done():
-                    task.cancel()
-
-            tasks = set(callback_tasks.values())
-
-            if tasks:
-                closeout_task = asyncio.create_task(asyncio.wait(tasks))
-
-                while not closeout_task.done():
-                    with suppress(asyncio.CancelledError):
-                        await asyncio.shield(closeout_task)
+        We are not expecting any messages from the input connection.
+        This is just to keep the connection alive.
+        """
+        async for raw_msg in web_socket:
+            _LOGGER.debug("input recv(%s): %s", self.host, raw_msg)
+            if raw_msg.type is not WSMsgType.TEXT:
+                break
 
     # manage state
     @property
@@ -480,11 +483,7 @@ class WebOsClient:
 
     async def do_state_update_callbacks(self) -> None:
         """Call user state update callback."""
-        callbacks = set()
-        for callback in self.state_update_callbacks:
-            callbacks.add(callback(self))
-
-        if callbacks:
+        if callbacks := {callback(self) for callback in self.state_update_callbacks}:
             await asyncio.gather(*callbacks)
 
     async def set_power_state(self, payload: dict[str, bool | str]) -> None:
