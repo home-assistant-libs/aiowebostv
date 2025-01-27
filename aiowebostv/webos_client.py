@@ -163,7 +163,8 @@ class WebOsClient:
             if response["type"] == "hello":
                 self._hello_info = response["payload"]
             else:
-                raise WebOsTvCommandError(f"Invalid response type {response}")
+                error = f"Invalid response type {response}"
+                raise WebOsTvCommandError(error)
 
             # send registration
             _LOGGER.debug("send(%s): registration", self.host)
@@ -189,7 +190,8 @@ class WebOsClient:
                     self.client_key = response["payload"]["client-key"]
 
             if not self.client_key:
-                raise WebOsTvPairError("Unable to pair")
+                error = "Client key not set, pairing failed."
+                raise WebOsTvPairError(error)
 
             self.callbacks = {}
             self.futures = {}
@@ -624,7 +626,8 @@ class WebOsClient:
         }
 
         if self.connection is None:
-            raise WebOsTvCommandError("Not connected, can't execute command.")
+            error = "Not connected, can't execute command."
+            raise WebOsTvCommandError(error)
 
         _LOGGER.debug("send(%s): %s", self.host, message)
         await self.connection.send_json(message)
@@ -657,7 +660,8 @@ class WebOsClient:
 
         payload = response.get("payload")
         if payload is None:
-            raise WebOsTvCommandError(f"Invalid request response {response}")
+            error = f"Invalid request response {response}"
+            raise WebOsTvCommandError(error)
 
         return_value = (
             payload.get("returnValue")
@@ -671,9 +675,11 @@ class WebOsClient:
                 raise WebOsTvServiceNotFoundError(error)
             raise WebOsTvResponseTypeError(response)
         if return_value is None:
-            raise WebOsTvCommandError(f"Invalid request response {response}")
+            error = f"Invalid request response {response}"
+            raise WebOsTvCommandError(error)
         if not return_value:
-            raise WebOsTvCommandError(f"Request failed with response {response}")
+            error = f"Request failed with response {response}"
+            raise WebOsTvCommandError(error)
 
         return payload
 
@@ -695,7 +701,8 @@ class WebOsClient:
     async def input_command(self, message: str) -> None:
         """Execute TV input command."""
         if self.input_connection is None:
-            raise WebOsTvCommandError("Couldn't execute input command.")
+            error = "Not connected, can't execute input command."
+            raise WebOsTvCommandError(error)
 
         _LOGGER.debug("send(%s): %s", self.host, message)
         await self.input_connection.send_str(message)
@@ -835,24 +842,6 @@ class WebOsClient:
     async def power_on(self) -> dict[str, Any]:
         """Play media."""
         return await self.request(ep.POWER_ON)
-
-    async def turn_screen_off(self, webos_ver: str = "") -> dict[str, Any]:
-        """Turn TV Screen off."""
-        ep_name = f"TURN_OFF_SCREEN_WO{webos_ver}" if webos_ver else "TURN_OFF_SCREEN"
-
-        if not hasattr(ep, ep_name):
-            raise ValueError(f"there's no {ep_name} endpoint")
-
-        return await self.request(getattr(ep, ep_name), {"standbyMode": "active"})
-
-    async def turn_screen_on(self, webos_ver: str = "") -> dict[str, Any]:
-        """Turn TV Screen on."""
-        ep_name = f"TURN_ON_SCREEN_WO{webos_ver}" if webos_ver else "TURN_ON_SCREEN"
-
-        if not hasattr(ep, ep_name):
-            raise ValueError(f"there's no {ep_name} endpoint")
-
-        return await self.request(getattr(ep, ep_name), {"standbyMode": "active"})
 
     # 3D Mode
     async def turn_3d_on(self) -> dict[str, Any]:
