@@ -723,7 +723,7 @@ class WebOsClient:
             task.cancel()
         while not task.done():
             with suppress(asyncio.CancelledError):
-                await asyncio.shield(task)
+                await task
         del self.callback_queues[uid]
 
     async def subscribe(
