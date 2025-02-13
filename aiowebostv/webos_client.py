@@ -27,6 +27,9 @@ from .handshake import REGISTRATION_MESSAGE
 
 SOUND_OUTPUTS_TO_DELAY_CONSECUTIVE_VOLUME_STEPS = {"external_arc"}
 
+MAIN_WS_MAX_MSG_SIZE = 8 * 1024 * 1024  # 8MB, based on channel list size
+INPUT_WS_MAX_MSG_SIZE = 8 * 1024  # 8KB, not expecting any messages
+
 WS_PORT = 3000
 WSS_PORT = 3001
 
@@ -113,9 +116,11 @@ class WebOsClient:
         handshake["payload"]["client-key"] = self.client_key  # type: ignore[index]
         return handshake
 
-    async def _ws_connect(self, uri: str) -> ClientWebSocketResponse:
+    async def _ws_connect(self, uri: str, max_msg_size: int) -> ClientWebSocketResponse:
         """Create websocket connection."""
-        _LOGGER.debug("connect(%s): uri: %s", self.host, uri)
+        _LOGGER.debug(
+            "connect(%s): uri: %s, max_msg_size: %s", self.host, uri, max_msg_size
+        )
 
         if TYPE_CHECKING:
             assert self.client_session is not None
@@ -123,7 +128,10 @@ class WebOsClient:
         # webOS uses self-signed certificates, disable SSL certificate validation
         async with asyncio.timeout(self.timeout_connect):
             return await self.client_session.ws_connect(
-                uri, heartbeat=self.heartbeat, ssl=False
+                uri,
+                heartbeat=self.heartbeat,
+                ssl=False,
+                max_msg_size=max_msg_size,
             )
 
     async def close_client_session(self) -> None:
@@ -142,12 +150,12 @@ class WebOsClient:
         """
         try:
             uri = f"ws://{self.host}:{WS_PORT}"
-            return await self._ws_connect(uri)
+            return await self._ws_connect(uri, MAIN_WS_MAX_MSG_SIZE)
         # ClientConnectionError is raised when firmware reject WS_PORT
         # WSServerHandshakeError is raised when firmware enforce using ssl
         except (aiohttp.ClientConnectionError, aiohttp.WSServerHandshakeError):
             uri = f"wss://{self.host}:{WSS_PORT}"
-            return await self._ws_connect(uri)
+            return await self._ws_connect(uri, MAIN_WS_MAX_MSG_SIZE)
 
     def _ensure_client_session(self) -> None:
         """Create a new client session if no client session provided."""
@@ -205,7 +213,7 @@ class WebOsClient:
         """
         sockres = await self.request(ep.INPUT_SOCKET)
         inputsockpath = sockres["socketPath"]
-        return await self._ws_connect(inputsockpath)
+        return await self._ws_connect(inputsockpath, INPUT_WS_MAX_MSG_SIZE)
 
     async def _get_states_and_subscribe_state_updates(self) -> None:
         """Get initial states and subscribe to state updates.
