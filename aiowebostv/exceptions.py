@@ -13,6 +13,10 @@ class WebOsTvCommandError(WebOsTvError):
     """Represent TV command errors."""
 
 
+class WebOsTvCommandTimeoutError(WebOsTvCommandError):
+    """Represent TV command timeout error."""
+
+
 class WebOsTvResponseTypeError(WebOsTvCommandError):
     """Represent TV responded with error type."""
 

@@ -19,11 +19,17 @@ from aiohttp import ClientSession, ClientWebSocketResponse, WSMsgType
 from . import endpoints as ep
 from .exceptions import (
     WebOsTvCommandError,
+    WebOsTvCommandTimeoutError,
     WebOsTvPairError,
     WebOsTvResponseTypeError,
     WebOsTvServiceNotFoundError,
 )
 from .handshake import REGISTRATION_MESSAGE
+
+CONNECT_TIMEOUT = 2
+RECEIVE_TIMEOUT = 10
+
+HEARTBEAT = 5
 
 SOUND_OUTPUTS_TO_DELAY_CONSECUTIVE_VOLUME_STEPS = {"external_arc"}
 
@@ -43,8 +49,8 @@ class WebOsClient:
         self,
         host: str,
         client_key: str | None = None,
-        connect_timeout: float = 2,
-        heartbeat: float = 5,
+        connect_timeout: float = CONNECT_TIMEOUT,
+        heartbeat: float = HEARTBEAT,
         client_session: ClientSession | None = None,
     ) -> None:
         """Initialize the client."""
@@ -167,7 +173,7 @@ class WebOsClient:
         """Get hello info."""
         _LOGGER.debug("send(%s): hello", self.host)
         await ws.send_json({"id": "hello", "type": "hello"})
-        response = await ws.receive_json()
+        response = await ws.receive_json(timeout=RECEIVE_TIMEOUT)
         _LOGGER.debug("recv(%s): %s", self.host, response)
 
         if response["type"] == "hello":
@@ -180,14 +186,14 @@ class WebOsClient:
         """Check if the client is registered with the tv."""
         _LOGGER.debug("send(%s): registration", self.host)
         await ws.send_json(self.registration_msg())
-        response = await ws.receive_json()
+        response = await ws.receive_json(timeout=RECEIVE_TIMEOUT)
         _LOGGER.debug("recv(%s): registration", self.host)
 
         if (
             response["type"] == "response"
             and response["payload"]["pairingType"] == "PROMPT"
         ):
-            response = await ws.receive_json()
+            response = await ws.receive_json(timeout=RECEIVE_TIMEOUT)
             _LOGGER.debug("recv(%s): pairing", self.host)
             _LOGGER.debug(
                 "pairing(%s): type: %s, error: %s",
@@ -675,18 +681,21 @@ class WebOsClient:
             res = self.futures[uid]
         try:
             await self.command(cmd_type, uri, payload, uid)
+            async with asyncio.timeout(RECEIVE_TIMEOUT):
+                response = await res
+        except TimeoutError as err:
+            error = f"Response timed out for {uri} with uid {uid}"
+            raise WebOsTvCommandTimeoutError(error) from err
         except (asyncio.CancelledError, WebOsTvCommandError):
+            raise
+        finally:
             del self.futures[uid]
-            raise
-        try:
-            response = await res
-        except asyncio.CancelledError:
-            if uid in self.futures:
-                del self.futures[uid]
-            raise
-        del self.futures[uid]
 
-        payload = response.get("payload")
+        return self._parse_response(response)
+
+    def _parse_response(self, response: dict[str, Any]) -> dict[str, Any]:
+        """Parse response."""
+        payload: dict[str, Any] | None = response.get("payload")
         if payload is None:
             error = f"Invalid request response {response}"
             raise WebOsTvCommandError(error)
@@ -698,7 +707,7 @@ class WebOsClient:
         )
 
         if response.get("type") == "error":
-            error = response.get("error")
+            error = response.get("error", "")
             if error == "404 no such service or method":
                 raise WebOsTvServiceNotFoundError(error)
             raise WebOsTvResponseTypeError(response)
