@@ -26,8 +26,9 @@ from .exceptions import (
 )
 from .handshake import REGISTRATION_MESSAGE
 
-CONNECT_TIMEOUT = 2
-RECEIVE_TIMEOUT = 10
+CONNECT_TIMEOUT = 2  # Timeout for connecting to the TV
+RECEIVE_TIMEOUT = 10  # Timeout for receiving messages using ws.receive_json
+REQUEST_TIMEOUT = 5  # Timeout for waiting for a response to a request
 
 HEARTBEAT = 5
 
@@ -681,7 +682,7 @@ class WebOsClient:
             res = self.futures[uid]
         try:
             await self.command(cmd_type, uri, payload, uid)
-            async with asyncio.timeout(RECEIVE_TIMEOUT):
+            async with asyncio.timeout(REQUEST_TIMEOUT):
                 response = await res
         except TimeoutError as err:
             error = f"Response timed out for {uri} with uid {uid}"
