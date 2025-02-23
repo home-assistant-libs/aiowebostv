@@ -437,29 +437,10 @@ class WebOsClient:
         await self.do_state_update_callbacks()
 
     async def set_current_app_state(self, app_id: str) -> None:
-        """Set current app state variable.
-
-        This function also handles subscriptions to current channel and
-        channel list, since the current channel subscription can only
-        succeed when Live TV is running and channel list subscription
-        can only succeed after channels have been configured.
-        """
+        """Set current app state variable."""
         self.tv_state.current_app_id = app_id
         self.tv_state.is_on = self._is_tv_on()
         self.tv_state.is_screen_on = self._is_screen_on()
-
-        if self.tv_state.channels is None:
-            with suppress(WebOsTvCommandError):
-                await self.subscribe_channels(self.set_channels_state)
-
-        if app_id == "com.webos.app.livetv" and self.tv_state.current_channel is None:
-            await asyncio.sleep(2)
-            with suppress(WebOsTvCommandError):
-                await self.subscribe_current_channel(self.set_current_channel_state)
-        else:
-            self.tv_state.current_channel = None
-            self.tv_state.channel_info = None
-
         await self.do_state_update_callbacks()
 
     async def set_muted_state(self, muted: bool) -> None:  # noqa: FBT001
@@ -478,18 +459,8 @@ class WebOsClient:
         await self.do_state_update_callbacks()
 
     async def set_current_channel_state(self, channel: dict[str, Any]) -> None:
-        """Set current channel state variable.
-
-        This function also handles the channel info subscription,
-        since that call may fail if channel information is not
-        available when it's called.
-        """
+        """Set current channel state variable."""
         self.tv_state.current_channel = channel
-
-        if self.tv_state.channel_info is None:
-            with suppress(WebOsTvCommandError):
-                await self.subscribe_channel_info(self.set_channel_info_state)
-
         await self.do_state_update_callbacks()
 
     async def set_channel_info_state(self, channel_info: dict[str, Any]) -> None:
