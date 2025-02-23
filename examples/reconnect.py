@@ -37,7 +37,7 @@ async def main() -> None:
 
         now = datetime.now(UTC).astimezone().strftime("%H:%M:%S.%f")[:-3]
         is_connected = client.is_connected()
-        is_on = client.is_on
+        is_on = client.tv_state.is_on
 
         print(f"[{now}] Connected: {is_connected}, Powered on: {is_on}")
 

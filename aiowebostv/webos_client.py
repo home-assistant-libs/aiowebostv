@@ -25,6 +25,7 @@ from .exceptions import (
     WebOsTvServiceNotFoundError,
 )
 from .handshake import REGISTRATION_MESSAGE
+from .models import WebOsTvInfo, WebOsTvState
 
 CONNECT_TIMEOUT = 2  # Timeout for connecting to the TV
 RECEIVE_TIMEOUT = 10  # Timeout for receiving messages using ws.receive_json
@@ -67,25 +68,13 @@ class WebOsClient:
         self.connection: ClientWebSocketResponse | None = None
         self.input_connection: ClientWebSocketResponse | None = None
         self.futures: dict[int, Future[dict[str, Any]]] = {}
-        self._power_state: dict[str, Any] = {}
-        self._current_app_id: str | None = None
-        self._muted: bool | None = None
-        self._volume: int | None = None
-        self._current_channel: dict[str, Any] | None = None
-        self._channel_info: dict[str, Any] | None = None
-        self._channels: list[dict[str, Any]] | None = None
-        self._apps: dict[str, Any] = {}
-        self._extinputs: dict[str, Any] = {}
-        self._system_info: dict[str, Any] = {}
-        self._software_info: dict[str, Any] = {}
-        self._hello_info: dict[str, Any] = {}
-        self._sound_output: str | None = None
+        self.tv_state = WebOsTvState()
+        self.tv_info = WebOsTvInfo()
         self.state_update_callbacks: list[Callable] = []
         self.do_state_update = False
         self._volume_step_lock = asyncio.Lock()
         self._volume_step_delay: timedelta | None = None
         self._loop = asyncio.get_running_loop()
-        self._media_state: list[dict[str, Any]] = []
         self.callback_queues: dict[int, Queue[dict[str, Any]]] = {}
         self.callback_tasks: dict[int, Task] = {}
         self._rx_tasks: set[Task] = set()
@@ -178,7 +167,7 @@ class WebOsClient:
         _LOGGER.debug("recv(%s): %s", self.host, response)
 
         if response["type"] == "hello":
-            self._hello_info = response["payload"]
+            self.tv_info.hello = response["payload"]
         else:
             error = f"Invalid response type {response}"
             raise WebOsTvCommandError(error)
@@ -228,7 +217,7 @@ class WebOsClient:
         Avoid partial updates during initial subscription.
         """
         self.do_state_update = False
-        self._system_info, self._software_info = await asyncio.gather(
+        self.tv_info.system, self.tv_info.software = await asyncio.gather(
             self.get_system_info(), self.get_software_info()
         )
         subscribe_state_updates = {
@@ -249,28 +238,10 @@ class WebOsClient:
             with suppress(WebOsTvServiceNotFoundError):
                 task.result()
         # set placeholder power state if not available
-        if not self._power_state:
-            self._power_state = {"state": "Unknown"}
+        if not self.tv_state.power_state:
+            self.tv_state.power_state = {"state": "Unknown"}
         self.do_state_update = True
-        if self.state_update_callbacks:
-            await self.do_state_update_callbacks()
-
-    def _clear_tv_states(self) -> None:
-        """Clear all TV states."""
-        self._power_state = {}
-        self._current_app_id = None
-        self._muted = None
-        self._volume = None
-        self._current_channel = None
-        self._channel_info = None
-        self._channels = None
-        self._apps = {}
-        self._extinputs = {}
-        self._system_info = {}
-        self._software_info = {}
-        self._hello_info = {}
-        self._sound_output = None
-        self._media_state = []
+        await self.do_state_update_callbacks()
 
     def _cancel_tasks(self) -> None:
         """Cancel all tasks."""
@@ -310,10 +281,10 @@ class WebOsClient:
         self.connection = None
         self.input_connection = None
         self.do_state_update = False
-        self._clear_tv_states()
+        self.tv_state.clear()
 
         for callback in self.state_update_callbacks:
-            closeout.add(asyncio.create_task(callback(self)))
+            closeout.add(asyncio.create_task(callback(self.tv_state)))
 
         if not closeout:
             return
@@ -329,6 +300,7 @@ class WebOsClient:
         self.callback_queues = {}
         self.callback_tasks = {}
         self.futures = {}
+        self.tv_info.clear()
         main_ws: ClientWebSocketResponse | None = None
         input_ws: ClientWebSocketResponse | None = None
         self._ensure_client_session()
@@ -403,100 +375,13 @@ class WebOsClient:
             if raw_msg.type is not WSMsgType.TEXT:
                 break
 
-    # manage state
-    @property
-    def power_state(self) -> dict[str, Any]:
-        """Return TV power state."""
-        return self._power_state
-
-    @property
-    def current_app_id(self) -> str | None:
-        """Return current TV App Id."""
-        return self._current_app_id
-
-    @property
-    def muted(self) -> bool | None:
-        """Return true if TV is muted."""
-        return self._muted
-
-    @property
-    def volume(self) -> int | None:
-        """Return current TV volume level."""
-        return self._volume
-
-    @property
-    def current_channel(self) -> dict[str, Any] | None:
-        """Return current TV channel."""
-        return self._current_channel
-
-    @property
-    def channel_info(self) -> dict[str, Any] | None:
-        """Return current channel info."""
-        return self._channel_info
-
-    @property
-    def channels(self) -> list[dict[str, Any]] | None:
-        """Return channel list."""
-        return self._channels
-
-    @property
-    def apps(self) -> dict[str, Any]:
-        """Return apps list."""
-        return self._apps
-
-    @property
-    def inputs(self) -> dict[str, Any]:
-        """Return external inputs list."""
-        return self._extinputs
-
-    @property
-    def system_info(self) -> dict[str, Any]:
-        """Return TV system info."""
-        return self._system_info
-
-    @property
-    def software_info(self) -> dict[str, Any]:
-        """Return TV software info."""
-        return self._software_info
-
-    @property
-    def hello_info(self) -> dict[str, Any]:
-        """Return TV hello info."""
-        return self._hello_info
-
-    @property
-    def sound_output(self) -> str | None:
-        """Return TV sound output."""
-        return self._sound_output
-
-    @property
-    def is_on(self) -> bool:
-        """Return true if TV is powered on."""
-        state = self._power_state.get("state")
-        if state == "Unknown":
-            # fallback to current app id for some older webos versions
-            # which don't support explicit power state
-            return self._current_app_id not in [None, ""]
-
-        return state not in [None, "Power Off", "Suspend", "Active Standby"]
-
-    @property
-    def is_screen_on(self) -> bool:
-        """Return true if screen is on."""
-        if self.is_on:
-            return self._power_state.get("state") != "Screen Off"
-        return False
-
-    @property
-    def media_state(self) -> list[dict[str, Any]]:
-        """Return media player state."""
-        return self._media_state
-
-    async def register_state_update_callback(self, callback: Callable) -> None:
+    async def register_state_update_callback(
+        self, callback: Callable[[WebOsTvState], Any]
+    ) -> None:
         """Register user state update callback."""
         self.state_update_callbacks.append(callback)
         if self.do_state_update:
-            await callback(self)
+            await callback(self.tv_state)
 
     def set_volume_step_delay(self, step_delay_ms: float | None) -> None:
         """Set volume step delay in ms or None to disable step delay."""
@@ -506,7 +391,9 @@ class WebOsClient:
 
         self._volume_step_delay = timedelta(milliseconds=step_delay_ms)
 
-    def unregister_state_update_callback(self, callback: Callable) -> None:
+    def unregister_state_update_callback(
+        self, callback: Callable[[WebOsTvState], Any]
+    ) -> None:
         """Unregister user state update callback."""
         if callback in self.state_update_callbacks:
             self.state_update_callbacks.remove(callback)
@@ -517,15 +404,34 @@ class WebOsClient:
 
     async def do_state_update_callbacks(self) -> None:
         """Call user state update callback."""
-        if callbacks := {callback(self) for callback in self.state_update_callbacks}:
-            await asyncio.gather(*callbacks)
+        if not self.state_update_callbacks or not self.do_state_update:
+            return
+
+        callbacks = {cb(self.tv_state) for cb in self.state_update_callbacks}
+        await asyncio.gather(*callbacks)
+
+    def _is_tv_on(self) -> bool:
+        """Return true if TV is powered on."""
+        state = self.tv_state.power_state.get("state")
+        if state == "Unknown":
+            # fallback to current app id for some older webos versions
+            # which don't support explicit power state
+            return self.tv_state.current_app_id not in [None, ""]
+
+        return state not in [None, "Power Off", "Suspend", "Active Standby"]
+
+    def _is_screen_on(self) -> bool:
+        """Return true if screen is on."""
+        if self.tv_state.is_on:
+            return self.tv_state.power_state.get("state") != "Screen Off"
+        return False
 
     async def set_power_state(self, payload: dict[str, bool | str]) -> None:
         """Set TV power state callback."""
-        self._power_state = payload
-
-        if self.state_update_callbacks and self.do_state_update:
-            await self.do_state_update_callbacks()
+        self.tv_state.power_state = payload
+        self.tv_state.is_on = self._is_tv_on()
+        self.tv_state.is_screen_on = self._is_screen_on()
+        await self.do_state_update_callbacks()
 
     async def set_current_app_state(self, app_id: str) -> None:
         """Set current app state variable.
@@ -535,40 +441,35 @@ class WebOsClient:
         succeed when Live TV is running and channel list subscription
         can only succeed after channels have been configured.
         """
-        self._current_app_id = app_id
+        self.tv_state.current_app_id = app_id
+        self.tv_state.is_on = self._is_tv_on()
+        self.tv_state.is_screen_on = self._is_screen_on()
 
-        if self._channels is None:
+        if self.tv_state.channels is None:
             with suppress(WebOsTvCommandError):
                 await self.subscribe_channels(self.set_channels_state)
 
-        if app_id == "com.webos.app.livetv" and self._current_channel is None:
+        if app_id == "com.webos.app.livetv" and self.tv_state.current_channel is None:
             await asyncio.sleep(2)
             with suppress(WebOsTvCommandError):
                 await self.subscribe_current_channel(self.set_current_channel_state)
 
-        if self.state_update_callbacks and self.do_state_update:
-            await self.do_state_update_callbacks()
+        await self.do_state_update_callbacks()
 
     async def set_muted_state(self, muted: bool) -> None:  # noqa: FBT001
         """Set TV mute state callback."""
-        self._muted = muted
-
-        if self.state_update_callbacks and self.do_state_update:
-            await self.do_state_update_callbacks()
+        self.tv_state.muted = muted
+        await self.do_state_update_callbacks()
 
     async def set_volume_state(self, volume: int) -> None:
         """Set TV volume level callback."""
-        self._volume = volume
-
-        if self.state_update_callbacks and self.do_state_update:
-            await self.do_state_update_callbacks()
+        self.tv_state.volume = volume
+        await self.do_state_update_callbacks()
 
     async def set_channels_state(self, channels: list[dict[str, Any]]) -> None:
         """Set TV channels callback."""
-        self._channels = channels
-
-        if self.state_update_callbacks and self.do_state_update:
-            await self.do_state_update_callbacks()
+        self.tv_state.channels = channels
+        await self.do_state_update_callbacks()
 
     async def set_current_channel_state(self, channel: dict[str, Any]) -> None:
         """Set current channel state variable.
@@ -577,62 +478,53 @@ class WebOsClient:
         since that call may fail if channel information is not
         available when it's called.
         """
-        self._current_channel = channel
+        self.tv_state.current_channel = channel
 
-        if self._channel_info is None:
+        if self.tv_state.channel_info is None:
             with suppress(WebOsTvCommandError):
                 await self.subscribe_channel_info(self.set_channel_info_state)
 
-        if self.state_update_callbacks and self.do_state_update:
-            await self.do_state_update_callbacks()
+        await self.do_state_update_callbacks()
 
     async def set_channel_info_state(self, channel_info: dict[str, Any]) -> None:
         """Set TV channel info state callback."""
-        self._channel_info = channel_info
-
-        if self.state_update_callbacks and self.do_state_update:
-            await self.do_state_update_callbacks()
+        self.tv_state.channel_info = channel_info
+        await self.do_state_update_callbacks()
 
     async def set_apps_state(self, payload: dict[str, Any]) -> None:
         """Set TV channel apps state callback."""
         apps = payload.get("launchPoints")
         if apps is not None:
-            self._apps = {}
+            self.tv_state.apps = {}
             for app in apps:
-                self._apps[app["id"]] = app
+                self.tv_state.apps[app["id"]] = app
         else:
             change = payload["change"]
             app_id = payload["id"]
             if change == "removed":
-                del self._apps[app_id]
+                del self.tv_state.apps[app_id]
             else:
-                self._apps[app_id] = payload
+                self.tv_state.apps[app_id] = payload
 
-        if self.state_update_callbacks and self.do_state_update:
-            await self.do_state_update_callbacks()
+        await self.do_state_update_callbacks()
 
     async def set_inputs_state(self, extinputs: list[dict[str, Any]]) -> None:
         """Set TV inputs state callback."""
-        self._extinputs = {}
+        self.tv_state.inputs = {}
         for extinput in extinputs:
-            self._extinputs[extinput["appId"]] = extinput
+            self.tv_state.inputs[extinput["appId"]] = extinput
 
-        if self.state_update_callbacks and self.do_state_update:
-            await self.do_state_update_callbacks()
+        await self.do_state_update_callbacks()
 
     async def set_sound_output_state(self, sound_output: str) -> None:
         """Set TV sound output state callback."""
-        self._sound_output = sound_output
-
-        if self.state_update_callbacks and self.do_state_update:
-            await self.do_state_update_callbacks()
+        self.tv_state.sound_output = sound_output
+        await self.do_state_update_callbacks()
 
     async def set_media_state(self, foreground_app_info: list[dict[str, bool]]) -> None:
         """Set TV media player state callback."""
-        self._media_state = foreground_app_info
-
-        if self.state_update_callbacks and self.do_state_update:
-            await self.do_state_update_callbacks()
+        self.tv_state.media_state = foreground_app_info
+        await self.do_state_update_callbacks()
 
     # low level request handling
 
@@ -897,7 +789,7 @@ class WebOsClient:
 
         Protect against turning tv back on if it is off.
         """
-        if not self.is_on:
+        if not self.tv_state.is_on:
             return
 
         # if tv is shutting down and standby+ option is not enabled,
@@ -994,7 +886,8 @@ class WebOsClient:
         shouldn't be possible to perform immediately after.
         """
         if (
-            self.sound_output in SOUND_OUTPUTS_TO_DELAY_CONSECUTIVE_VOLUME_STEPS
+            self.tv_state.sound_output
+            in SOUND_OUTPUTS_TO_DELAY_CONSECUTIVE_VOLUME_STEPS
             and self._volume_step_delay is not None
         ):
             async with self._volume_step_lock:
