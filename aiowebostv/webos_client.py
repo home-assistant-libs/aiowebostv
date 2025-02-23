@@ -521,23 +521,8 @@ class WebOsClient:
             await self.do_state_update_callbacks()
 
     async def set_current_app_state(self, app_id: str) -> None:
-        """Set current app state variable.
-
-        This function also handles subscriptions to current channel and
-        channel list, since the current channel subscription can only
-        succeed when Live TV is running and channel list subscription
-        can only succeed after channels have been configured.
-        """
+        """Set current app state variable."""
         self._current_app_id = app_id
-
-        if self._channels is None:
-            with suppress(WebOsTvCommandError):
-                await self.subscribe_channels(self.set_channels_state)
-
-        if app_id == "com.webos.app.livetv" and self._current_channel is None:
-            await asyncio.sleep(2)
-            with suppress(WebOsTvCommandError):
-                await self.subscribe_current_channel(self.set_current_channel_state)
 
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
@@ -564,17 +549,8 @@ class WebOsClient:
             await self.do_state_update_callbacks()
 
     async def set_current_channel_state(self, channel: dict[str, Any]) -> None:
-        """Set current channel state variable.
-
-        This function also handles the channel info subscription,
-        since that call may fail if channel information is not
-        available when it's called.
-        """
+        """Set current channel state variable."""
         self._current_channel = channel
-
-        if self._channel_info is None:
-            with suppress(WebOsTvCommandError):
-                await self.subscribe_channel_info(self.set_channel_info_state)
 
         if self.state_update_callbacks and self.do_state_update:
             await self.do_state_update_callbacks()
