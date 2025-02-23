@@ -3,16 +3,14 @@
 from dataclasses import MISSING, dataclass, field, fields
 from typing import Any
 
-WebOsTvStateValue = dict[str, Any] | str | bool | int | list[dict[str, Any]] | None
-
 
 @dataclass
 class WebOsTvInfo:
     """Represent LG webOS TV info."""
 
-    hello: dict[str, Any] = field(default_factory=dict[str, Any])
-    system: dict[str, Any] = field(default_factory=dict[str, Any])
-    software: dict[str, Any] = field(default_factory=dict[str, Any])
+    hello: dict[str, Any] = field(default_factory=dict)
+    system: dict[str, Any] = field(default_factory=dict)
+    software: dict[str, Any] = field(default_factory=dict)
 
     def clear(self) -> None:
         """Reset all fields to their default values."""
