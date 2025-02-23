@@ -11,5 +11,6 @@ lint.ignore = [
 
 [lint.per-file-ignores]
 "examples/*" = [
-    "T201",      # `print` found
+    "T201",     # `print` found
+    "T203",     # `pprint` found
 ]

@@ -1,6 +1,7 @@
 """Basic webOS client example."""
 
 import asyncio
+from pprint import pprint
 
 from aiowebostv import WebOsClient
 
@@ -17,9 +18,8 @@ async def main() -> None:
     # Store this key for future use
     print(f"Client key: {client.client_key}")
 
-    if (apps := await client.get_apps_all()) is not None:
-        for app in apps:
-            print(app)
+    pprint(client.tv_info)
+    pprint(client.tv_state)
 
     await client.disconnect()
 

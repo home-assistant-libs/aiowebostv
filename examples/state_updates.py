@@ -1,31 +1,26 @@
 """Subscribed state updates example."""
 
 import asyncio
+import dataclasses
 import signal
+from datetime import UTC, datetime
+from pprint import pprint
 
 from aiowebostv import WebOsClient
+from aiowebostv.models import WebOsTvState
 
 HOST = "192.168.1.39"
 # For first time pairing set key to None
 CLIENT_KEY = "140cce792ae045920e14da4daa414582"
 
 
-async def on_state_change(client: WebOsClient) -> None:
+async def on_state_change(tv_state: WebOsTvState) -> None:
     """State changed callback."""
-    print("State changed:")
-    print(f"System info: {client.system_info}")
-    print(f"Software info: {client.software_info}")
-    print(f"Hello info: {client.hello_info}")
-    print(f"Channel info: {client.channel_info}")
-    print(f"Apps: {client.apps}")
-    print(f"Inputs: {client.inputs}")
-    print(f"Powered on: {client.power_state}")
-    print(f"App Id: {client.current_app_id}")
-    print(f"Channels: {client.channels}")
-    print(f"Current channel: {client.current_channel}")
-    print(f"Muted: {client.muted}")
-    print(f"Volume: {client.volume}")
-    print(f"Sound output: {client.sound_output}")
+    now = datetime.now(UTC).astimezone().strftime("%H:%M:%S.%f")[:-3]
+    print(f"[{now}] State change:")
+    # for the example, remove apps and inputs to make the output more readable
+    state = dataclasses.replace(tv_state, apps={}, inputs={})
+    pprint(state)
 
 
 async def main() -> None:
