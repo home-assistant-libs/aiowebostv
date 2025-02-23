@@ -237,6 +237,9 @@ class WebOsClient:
         for task in subscribe_tasks:
             with suppress(WebOsTvServiceNotFoundError):
                 task.result()
+        # set placeholder power state if not available
+        if not self.tv_state.power_state:
+            self.tv_state.power_state = {"state": "Unknown"}
         self.do_state_update = True
         await self.do_state_update_callbacks()
 
@@ -407,9 +410,27 @@ class WebOsClient:
         callbacks = {cb(self.tv_state) for cb in self.state_update_callbacks}
         await asyncio.gather(*callbacks)
 
+    def _is_tv_on(self) -> bool:
+        """Return true if TV is powered on."""
+        state = self.tv_state.power_state.get("state")
+        if state == "Unknown":
+            # fallback to current app id for some older webos versions
+            # which don't support explicit power state
+            return self.tv_state.current_app_id not in [None, ""]
+
+        return state not in [None, "Power Off", "Suspend", "Active Standby"]
+
+    def _is_screen_on(self) -> bool:
+        """Return true if screen is on."""
+        if self.tv_state.is_on:
+            return self.tv_state.power_state.get("state") != "Screen Off"
+        return False
+
     async def set_power_state(self, payload: dict[str, bool | str]) -> None:
         """Set TV power state callback."""
         self.tv_state.power_state = payload
+        self.tv_state.is_on = self._is_tv_on()
+        self.tv_state.is_screen_on = self._is_screen_on()
         await self.do_state_update_callbacks()
 
     async def set_current_app_state(self, app_id: str) -> None:
@@ -421,6 +442,8 @@ class WebOsClient:
         can only succeed after channels have been configured.
         """
         self.tv_state.current_app_id = app_id
+        self.tv_state.is_on = self._is_tv_on()
+        self.tv_state.is_screen_on = self._is_screen_on()
 
         if self.tv_state.channels is None:
             with suppress(WebOsTvCommandError):

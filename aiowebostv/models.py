@@ -39,26 +39,7 @@ class WebOsTvState:
     channels: list[dict[str, Any]] | None = None
     # Calculated fields
     is_on: bool = False
-    is_screen_on: bool | None = None
-
-    def __setattr__(self, name: str, value: WebOsTvStateValue) -> None:
-        """Update is_on & is_screen_on when power_state/current_app_id changes.
-
-        is_on fallback to current_app_id for older webos versions
-        which don't support explicit power state
-        """
-        super().__setattr__(name, value)  # Set the actual field
-
-        # Update calculated fields
-        if name in ["power_state", "current_app_id"]:
-            is_on = bool(self.current_app_id)
-            is_screen_on = None
-            if state := self.power_state.get("state"):
-                is_on = state not in ["Power Off", "Suspend", "Active Standby"]
-                is_screen_on = is_on and state != "Screen Off"
-
-            super().__setattr__("is_on", is_on)
-            super().__setattr__("is_screen_on", is_screen_on)
+    is_screen_on: bool = False
 
     def clear(self) -> None:
         """Reset all fields to their default values."""
