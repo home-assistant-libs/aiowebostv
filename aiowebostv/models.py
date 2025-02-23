@@ -25,14 +25,14 @@ class WebOsTvInfo:
 class WebOsTvState:
     """Represent the state of a LG webOS TV."""
 
-    power_state: dict[str, Any] = field(default_factory=dict[str, Any])
+    power_state: dict[str, Any] = field(default_factory=dict)
     current_app_id: str | None = None
     sound_output: str | None = None
     muted: bool | None = None
     volume: int | None = None
-    apps: dict[str, Any] = field(default_factory=dict[str, Any])
-    inputs: dict[str, Any] = field(default_factory=dict[str, Any])
-    media_state: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    apps: dict[str, Any] = field(default_factory=dict)
+    inputs: dict[str, Any] = field(default_factory=dict)
+    media_state: list[dict[str, Any]] = field(default_factory=list)
     # Can't be empty dict, None is used to check if we need to subscribe to updates
     current_channel: dict[str, Any] | None = None
     channel_info: dict[str, Any] | None = None
