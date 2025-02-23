@@ -28,7 +28,7 @@ from .handshake import REGISTRATION_MESSAGE
 
 CONNECT_TIMEOUT = 2  # Timeout for connecting to the TV
 RECEIVE_TIMEOUT = 10  # Timeout for receiving messages using ws.receive_json
-REQUEST_TIMEOUT = 5  # Timeout for waiting for a response to a request
+REQUEST_TIMEOUT = 20  # Timeout for waiting for a response to a request
 
 HEARTBEAT = 5
 
