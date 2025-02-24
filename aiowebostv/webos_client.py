@@ -78,6 +78,7 @@ class WebOsClient:
         self.callback_queues: dict[int, Queue[dict[str, Any]]] = {}
         self.callback_tasks: dict[int, Task] = {}
         self._rx_tasks: set[Task] = set()
+        self._subscriptions: dict[str, int] = {}
 
     async def connect(self) -> bool:
         """Connect to webOS TV device."""
@@ -300,6 +301,8 @@ class WebOsClient:
         self.callback_queues = {}
         self.callback_tasks = {}
         self.futures = {}
+        self._subscriptions = {}
+        self.command_count = 0
         self.tv_info.clear()
         main_ws: ClientWebSocketResponse | None = None
         input_ws: ClientWebSocketResponse | None = None
@@ -453,6 +456,9 @@ class WebOsClient:
             await asyncio.sleep(2)
             with suppress(WebOsTvCommandError):
                 await self.subscribe_current_channel(self.set_current_channel_state)
+        else:
+            self.tv_state.current_channel = None
+            self.tv_state.channel_info = None
 
         await self.do_state_update_callbacks()
 
@@ -613,12 +619,15 @@ class WebOsClient:
 
         return payload
 
-    async def create_subscription_handler(self, uid: int, callback: Callable) -> None:
-        """Create a subscription handler for a given uid.
+    async def create_subscription_handler(
+        self, uri: str, uid: int, callback: Callable
+    ) -> None:
+        """Create a subscription handler for a given uri & uid.
 
         Create a queue to store the messages, a task to handle the messages
         and a future to signal first subscription update processed.
         """
+        self._subscriptions[uri] = uid
         self.futures[uid] = future = self._loop.create_future()
         queue: Queue[dict[str, Any]] = asyncio.Queue()
         self.callback_queues[uid] = queue
@@ -626,8 +635,9 @@ class WebOsClient:
             self.callback_handler(queue, callback, future)
         )
 
-    async def delete_subscription_handler(self, uid: int) -> None:
-        """Delete a subscription handler for a given uid."""
+    async def delete_subscription_handler(self, uri: str) -> None:
+        """Delete a subscription handler for a given uri."""
+        uid = self._subscriptions[uri]
         task = self.callback_tasks.pop(uid)
         if not task.done():
             task.cancel()
@@ -635,6 +645,7 @@ class WebOsClient:
             with suppress(asyncio.CancelledError):
                 await task
         del self.callback_queues[uid]
+        del self._subscriptions[uri]
 
     async def subscribe(
         self, callback: Callable, uri: str, payload: dict[str, Any] | None = None
@@ -645,15 +656,33 @@ class WebOsClient:
         """
         uid = self.command_count
         self.command_count += 1
-        await self.create_subscription_handler(uid, callback)
+        await self.create_subscription_handler(uri, uid, callback)
 
         try:
             return await self.request(
                 uri, payload=payload, cmd_type="subscribe", uid=uid
             )
         except Exception:
-            await self.delete_subscription_handler(uid)
+            await self.delete_subscription_handler(uri)
             raise
+
+    async def unsubscribe(self, uri: str) -> None:
+        """Unsubscribe from updates by uri.
+
+        Send unsubscribe command and delete the subscription handler.
+        uri is ignored by the TV, it is sent for debugging purposes.
+        """
+        uid = self._subscriptions[uri]
+        await self.command("unsubscribe", uri, uid=uid)
+        await self.delete_subscription_handler(uri)
+
+    async def resubscribe(
+        self, callback: Callable, uri: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Resubscribe to updates by first unsubscribing and then subscribing."""
+        if uri in self._subscriptions:
+            await self.unsubscribe(uri)
+        return await self.subscribe(callback, uri, payload)
 
     async def input_command(self, message: str) -> None:
         """Execute TV input command."""
@@ -925,7 +954,7 @@ class WebOsClient:
 
     async def subscribe_current_channel(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to changes in the current tv channel."""
-        return await self.subscribe(callback, ep.GET_CURRENT_CHANNEL)
+        return await self.resubscribe(callback, ep.GET_CURRENT_CHANNEL)
 
     async def get_channel_info(self) -> dict[str, Any]:
         """Get the current channel info."""
@@ -933,7 +962,7 @@ class WebOsClient:
 
     async def subscribe_channel_info(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to current channel info."""
-        return await self.subscribe(callback, ep.GET_CHANNEL_INFO)
+        return await self.resubscribe(callback, ep.GET_CHANNEL_INFO)
 
     async def set_channel(self, channel: str) -> dict[str, Any]:
         """Set the current channel."""
