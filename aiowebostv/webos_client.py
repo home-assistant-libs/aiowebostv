@@ -218,6 +218,8 @@ class WebOsClient:
         Avoid partial updates during initial subscription.
         """
         self.do_state_update = False
+        # set placeholder power state for older webos versions
+        self.tv_state.power_state = {"state": "Unknown"}
         self.tv_info.system, self.tv_info.software = await asyncio.gather(
             self.get_system_info(), self.get_software_info()
         )
@@ -238,9 +240,6 @@ class WebOsClient:
         for task in subscribe_tasks:
             with suppress(WebOsTvServiceNotFoundError):
                 task.result()
-        # set placeholder power state if not available
-        if not self.tv_state.power_state:
-            self.tv_state.power_state = {"state": "Unknown"}
         self.do_state_update = True
         await self.do_state_update_callbacks()
 
