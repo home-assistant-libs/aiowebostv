@@ -218,8 +218,6 @@ class WebOsClient:
         Avoid partial updates during initial subscription.
         """
         self.do_state_update = False
-        # set placeholder power state for older webos versions
-        self.tv_state.power_state = {"state": "Unknown"}
         self.tv_info.system, self.tv_info.software = await asyncio.gather(
             self.get_system_info(), self.get_software_info()
         )
@@ -414,13 +412,17 @@ class WebOsClient:
 
     def _is_tv_on(self) -> bool:
         """Return true if TV is powered on."""
-        state = self.tv_state.power_state.get("state")
-        if state == "Unknown":
+        if not self.tv_state.power_state:
             # fallback to current app id for some older webos versions
             # which don't support explicit power state
             return self.tv_state.current_app_id not in [None, ""]
 
-        return state not in [None, "Power Off", "Suspend", "Active Standby"]
+        return self.tv_state.power_state.get("state") not in [
+            None,
+            "Power Off",
+            "Suspend",
+            "Active Standby",
+        ]
 
     def _is_screen_on(self) -> bool:
         """Return true if screen is on."""
