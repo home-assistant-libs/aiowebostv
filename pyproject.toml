@@ -1,0 +1,28 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=77.0"]
+
+[project]
+name = "aiowebostv"
+version = "0.7.3"
+license = "Apache-2.0"
+description="Library to control webOS based LG TV devices"
+readme = "README.md"
+authors = [{ name = "Home Assistant Team", email = "hello@home-assistant.io" }]
+requires-python = ">=3.11"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Natural Language :: English",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Home Automation",
+]
+dependencies = [
+  "aiohttp>=3.11",
+]
+
+[project.urls]
+"Source code" = "https://github.com/home-assistant-libs/aiowebostv"

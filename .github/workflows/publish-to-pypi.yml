@@ -14,12 +14,12 @@ jobs:
         uses: actions/setup-python@v5.4.0
         with:
           python-version: 3.11
-      - name: Install wheel
+      - name: Install build
         run: >-
-          pip install wheel
+          pip install build
       - name: Build
         run: >-
-          python3 setup.py sdist bdist_wheel
+          python3 -m build
       - name: Publish release to PyPI
         uses: pypa/gh-action-pypi-publish@v1.12.4
         with:
