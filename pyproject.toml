@@ -26,3 +26,6 @@ dependencies = [
 
 [project.urls]
 "Source code" = "https://github.com/home-assistant-libs/aiowebostv"
+
+[tool.setuptools.packages.find]
+include = ["aiowebostv*"]
