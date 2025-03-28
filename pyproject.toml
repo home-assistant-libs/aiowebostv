@@ -4,7 +4,7 @@ requires = ["setuptools>=77.0"]
 
 [project]
 name = "aiowebostv"
-version = "0.7.3"
+version = "0.0.0"
 license = "Apache-2.0"
 description="Library to control webOS based LG TV devices"
 readme = "README.md"
