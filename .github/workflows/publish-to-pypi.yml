@@ -20,6 +20,8 @@ jobs:
       - name: Set package version
         run: |
           version="${{ github.event.release.tag_name }}"
+          version="${version,,}"
+          version="${version#v}"
           sed -i "s/^version = \".*\"/version = \"${version}\"/" pyproject.toml
       - name: Build
         run: >-

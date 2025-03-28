@@ -1,7 +1,7 @@
 change-template: "- #$NUMBER - $TITLE (@$AUTHOR)"
 
-name-template: "Version $RESOLVED_VERSION"
-tag-template: "$RESOLVED_VERSION"
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
 
 categories:
   - title: "🚨 Breaking changes"
