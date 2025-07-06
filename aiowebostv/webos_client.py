@@ -164,7 +164,8 @@ class WebOsClient:
         """Get hello info."""
         _LOGGER.debug("send(%s): hello", self.host)
         await ws.send_json({"id": "hello", "type": "hello", "payload": {}})
-        response = await ws.receive_json(timeout=RECEIVE_TIMEOUT)
+        async with asyncio.timeout(RECEIVE_TIMEOUT):
+            response = await ws.receive_json()
         _LOGGER.debug("recv(%s): %s", self.host, response)
 
         if response["type"] == "hello":
@@ -177,7 +178,8 @@ class WebOsClient:
         """Check if the client is registered with the tv."""
         _LOGGER.debug("send(%s): registration", self.host)
         await ws.send_json(self.registration_msg())
-        response = await ws.receive_json(timeout=RECEIVE_TIMEOUT)
+        async with asyncio.timeout(RECEIVE_TIMEOUT):
+            response = await ws.receive_json()
         _LOGGER.debug("recv(%s): registration", self.host)
 
         if (
