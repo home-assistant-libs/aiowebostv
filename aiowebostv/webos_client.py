@@ -174,6 +174,26 @@ class WebOsClient:
             error = f"Invalid response type {response}"
             raise WebOsTvCommandError(error)
 
+    async def _get_pre_reg_system_info(self, ws: ClientWebSocketResponse) -> None:
+        """Get system info before registration.
+
+        Newer webOS versions require system info to be retrieved before registration.
+        """
+        request = {
+            "id": "get_sys_info",
+            "type": "request",
+            "uri": f"ssap://{ep.GET_SYSTEM_INFO}",
+            "payload": {},
+        }
+        _LOGGER.debug("send(%s): %s", self.host, request)
+        await ws.send_json(request)
+        async with asyncio.timeout(RECEIVE_TIMEOUT):
+            response = await ws.receive_json()
+        _LOGGER.debug("recv(%s): %s", self.host, response)
+
+        with suppress(WebOsTvResponseTypeError):
+            self.tv_info.system = self._parse_response(response)
+
     async def _check_registration(self, ws: ClientWebSocketResponse) -> None:
         """Check if the client is registered with the tv."""
         _LOGGER.debug("send(%s): registration", self.host)
@@ -315,6 +335,7 @@ class WebOsClient:
         try:
             main_ws = await self._create_main_ws()
             await self._get_hello_info(main_ws)
+            await self._get_pre_reg_system_info(main_ws)
             await self._check_registration(main_ws)
             self._rx_tasks.add(asyncio.create_task(self._rx_msgs_main_ws(main_ws)))
             self.connection = main_ws
