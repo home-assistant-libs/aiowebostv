@@ -163,7 +163,7 @@ class WebOsClient:
     async def _get_hello_info(self, ws: ClientWebSocketResponse) -> None:
         """Get hello info."""
         _LOGGER.debug("send(%s): hello", self.host)
-        await ws.send_json({"id": "hello", "type": "hello"})
+        await ws.send_json({"id": "hello", "type": "hello", "payload": {}})
         response = await ws.receive_json(timeout=RECEIVE_TIMEOUT)
         _LOGGER.debug("recv(%s): %s", self.host, response)
 
