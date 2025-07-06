@@ -220,9 +220,15 @@ class WebOsClient:
         Avoid partial updates during initial subscription.
         """
         self.do_state_update = False
-        self.tv_info.system, self.tv_info.software = await asyncio.gather(
-            self.get_system_info(), self.get_software_info()
-        )
+
+        # Try to get system info; on newer webOS versions,
+        # this may fail because system info must be retrieved before registration.
+        if not self.tv_info.system:
+            with suppress(WebOsTvResponseTypeError):
+                self.tv_info.system = await self.get_system_info()
+
+        self.tv_info.software = await self.get_software_info()
+
         subscribe_state_updates = {
             self.subscribe_power_state(self.set_power_state),
             self.subscribe_current_app(self.set_current_app_state),
