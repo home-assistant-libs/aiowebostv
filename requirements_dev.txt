@@ -1,6 +1,6 @@
 -r requirements.txt
 -r requirements_lint.txt
 pre-commit==4.2.0
-tox==4.28.0
+tox==4.28.3
 
 -e .
