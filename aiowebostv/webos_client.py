@@ -83,7 +83,12 @@ class WebOsClient:
     async def connect(self) -> bool:
         """Connect to webOS TV device."""
         if self.is_connected():
+            _LOGGER.debug("connect(%s): already connected", self.host)
             return True
+
+        if self.connect_task_active() and self.connect_result is not None:
+            _LOGGER.debug("connect(%s): connection already in progress", self.host)
+            return await self.connect_result
 
         self.connect_result = self._loop.create_future()
         self.connect_task = asyncio.create_task(
@@ -94,18 +99,34 @@ class WebOsClient:
     async def disconnect(self) -> None:
         """Disconnect from webOS TV device."""
         if self.connect_task is not None and not self.connect_task.done():
+            _LOGGER.debug("disconnect(%s): disconnecting", self.host)
             self.connect_task.cancel()
-            with suppress(asyncio.CancelledError):
+            try:
                 await self.connect_task
-                self.connect_task = None
+            except asyncio.CancelledError:
+                _LOGGER.debug("disconnect(%s): connect task cancelled", self.host)
+                if self.connect_result is not None and not self.connect_result.done():
+                    self.connect_result.set_result(False)
+            return
+
+        _LOGGER.debug("disconnect(%s): already disconnected", self.host)
 
     def is_registered(self) -> bool:
         """Paired with the tv."""
         return self.client_key is not None
 
+    def connect_task_active(self) -> bool:
+        """Return true if connect task is active."""
+        return self.connect_task is not None and not self.connect_task.done()
+
     def is_connected(self) -> bool:
         """Return true if connected to the tv."""
-        return self.connect_task is not None and not self.connect_task.done()
+        return (
+            self.connect_task_active()
+            and self.connect_result is not None
+            and self.connect_result.done()
+            and self.connect_result.result()
+        )
 
     def registration_msg(self) -> dict[str, Any]:
         """Create registration message."""
