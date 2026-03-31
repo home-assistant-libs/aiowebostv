@@ -427,13 +427,6 @@ class WebOsClient:
             _LOGGER.debug(
                 "recv(%s): exception in main ws: %r", self.host, ex, exc_info=True
             )
-        finally:
-            # Connection lost - clear state and notify callbacks
-            self.tv_state.clear()
-            # Notify subscribers about connection loss
-            for callback in self.state_update_callbacks:
-                with suppress(Exception):
-                    await callback(self.tv_state)
 
     async def _rx_msgs_input_ws(self, web_socket: ClientWebSocketResponse) -> None:
         """Receive messages from input websocket connection.
