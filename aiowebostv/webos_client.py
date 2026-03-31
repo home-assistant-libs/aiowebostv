@@ -396,7 +396,14 @@ class WebOsClient:
 
     def _process_text_message(self, data: str) -> None:
         """Process text message."""
-        msg = json.loads(data)
+        try:
+            msg = json.loads(data)
+        except json.JSONDecodeError as ex:
+            _LOGGER.debug(
+                "recv(%s): failed to parse JSON message: %r", self.host, ex
+            )
+            return
+
         uid = msg.get("id")
         # if we have a callback for this message, put it in the queue
         # let the callback handle the message and mark the future as done
@@ -407,12 +414,26 @@ class WebOsClient:
 
     async def _rx_msgs_main_ws(self, web_socket: ClientWebSocketResponse) -> None:
         """Receive messages from main websocket connection."""
-        async for raw_msg in web_socket:
-            _LOGGER.debug("recv(%s): %s", self.host, raw_msg)
-            if raw_msg.type is not WSMsgType.TEXT:
-                break
+        try:
+            async for raw_msg in web_socket:
+                _LOGGER.debug("recv(%s): %s", self.host, raw_msg)
+                if raw_msg.type is not WSMsgType.TEXT:
+                    break
 
-            self._process_text_message(raw_msg.data)
+                self._process_text_message(raw_msg.data)
+        except asyncio.CancelledError:
+            pass
+        except (aiohttp.ClientError, json.JSONDecodeError) as ex:
+            _LOGGER.debug(
+                "recv(%s): exception in main ws: %r", self.host, ex, exc_info=True
+            )
+        finally:
+            # Connection lost - clear state and notify callbacks
+            self.tv_state.clear()
+            # Notify subscribers about connection loss
+            for callback in self.state_update_callbacks:
+                with suppress(Exception):
+                    await callback(self.tv_state)
 
     async def _rx_msgs_input_ws(self, web_socket: ClientWebSocketResponse) -> None:
         """Receive messages from input websocket connection.
@@ -420,10 +441,20 @@ class WebOsClient:
         We are not expecting any messages from the input connection.
         This is just to keep the connection alive.
         """
-        async for raw_msg in web_socket:
-            _LOGGER.debug("input recv(%s): %s", self.host, raw_msg)
-            if raw_msg.type is not WSMsgType.TEXT:
-                break
+        try:
+            async for raw_msg in web_socket:
+                _LOGGER.debug("input recv(%s): %s", self.host, raw_msg)
+                if raw_msg.type is not WSMsgType.TEXT:
+                    break
+        except asyncio.CancelledError:
+            pass
+        except aiohttp.ClientError as ex:
+            _LOGGER.debug(
+                "input recv(%s): exception in input ws: %r",
+                self.host,
+                ex,
+                exc_info=True,
+            )
 
     async def register_state_update_callback(
         self, callback: Callable[[WebOsTvState], Any]
