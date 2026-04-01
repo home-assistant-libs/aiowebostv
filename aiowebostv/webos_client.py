@@ -423,7 +423,7 @@ class WebOsClient:
                 self._process_text_message(raw_msg.data)
         except asyncio.CancelledError:
             pass
-        except (aiohttp.ClientError, json.JSONDecodeError) as ex:
+        except aiohttp.ClientError as ex:
             _LOGGER.debug(
                 "recv(%s): exception in main ws: %r", self.host, ex, exc_info=True
             )
