@@ -55,6 +55,7 @@ TURN_OFF_SCREEN = "com.webos.service.tvpower/power/turnOffScreen"
 TURN_ON_SCREEN = "com.webos.service.tvpower/power/turnOnScreen"
 GET_CONFIGS = "config/getConfigs"
 GET_MEDIA_FOREGROUND_APP_INFO = "com.webos.media/getForegroundAppInfo"
+GET_CONNECTION_MACS = "com.webos.service.connectionmanager/getinfo"
 
 # webOS TV internal Luna API endpoints
 LUNA_SET_CONFIGS = "com.webos.service.config/setConfigs"
