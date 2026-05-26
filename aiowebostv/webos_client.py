@@ -269,6 +269,7 @@ class WebOsClient:
                 self.tv_info.system = await self.get_system_info()
 
         self.tv_info.software = await self.get_software_info()
+        self.tv_info.connection_macs = await self.get_connection_macs()
 
         subscribe_state_updates = {
             self.subscribe_power_state(self.set_power_state),
@@ -863,6 +864,10 @@ class WebOsClient:
     ) -> dict[str, Any]:
         """Return the system information."""
         return await self.request(ep.GET_SYSTEM_INFO)
+
+    async def get_connection_macs(self) -> dict[str, Any]:
+        """Return the MAC addresses of network interfaces."""
+        return await self.request(ep.GET_CONNECTION_MACS)
 
     async def power_off(self) -> None:
         """Power off TV.
