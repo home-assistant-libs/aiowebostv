@@ -11,6 +11,7 @@ class WebOsTvInfo:
     hello: dict[str, Any] = field(default_factory=dict)
     system: dict[str, Any] = field(default_factory=dict)
     software: dict[str, Any] = field(default_factory=dict)
+    connection: dict[str, Any] = field(default_factory=dict)
 
     def clear(self) -> None:
         """Reset all fields to their default values."""
