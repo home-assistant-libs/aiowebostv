@@ -704,7 +704,7 @@ class WebOsClient:
     ) -> dict[str, Any]:
         """Subscribe to updates.
 
-        Subsciption use a fixed uid, pre-create a future and a handler.
+        Subscription use a fixed uid, pre-create a future and a handler.
         """
         uid = self.command_count
         self.command_count += 1
@@ -882,7 +882,7 @@ class WebOsClient:
         await self.command("request", ep.POWER_OFF)
 
     async def power_on(self) -> dict[str, Any]:
-        """Play media."""
+        """Power on TV."""
         return await self.request(ep.POWER_ON)
 
     # 3D Mode
@@ -893,6 +893,12 @@ class WebOsClient:
     async def turn_3d_off(self) -> dict[str, Any]:
         """Turn 3D off."""
         return await self.request(ep.SET_3D_OFF)
+
+    async def set_screen_state(self, on: bool) -> None:  # noqa: FBT001
+        """Set screen on or off."""
+        if self.tv_state.is_screen_on == on:
+            return
+        await self.request(ep.TURN_ON_SCREEN if on else ep.TURN_OFF_SCREEN)
 
     # Inputs
     async def get_inputs(self) -> dict[str, Any] | None:
