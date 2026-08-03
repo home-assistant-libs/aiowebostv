@@ -504,7 +504,11 @@ class WebOsClient:
             with suppress(WebOsTvCommandError):
                 await self.subscribe_channels(self.set_channels_state)
 
-        if app_id == "com.webos.app.livetv" and self.tv_state.current_channel is None:
+        if (
+            self.tv_state.channels
+            and app_id == "com.webos.app.livetv"
+            and self.tv_state.current_channel is None
+        ):
             await asyncio.sleep(2)
             with suppress(WebOsTvCommandError):
                 await self.subscribe_current_channel(self.set_current_channel_state)
