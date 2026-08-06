@@ -269,7 +269,8 @@ class WebOsClient:
                 self.tv_info.system = await self.get_system_info()
 
         self.tv_info.software = await self.get_software_info()
-        self.tv_info.connection = await self.get_connection_info()
+        with suppress(WebOsTvServiceNotFoundError):
+            self.tv_info.connection = await self.get_connection_info()
 
         subscribe_state_updates = {
             self.subscribe_power_state(self.set_power_state),
