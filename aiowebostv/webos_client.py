@@ -268,7 +268,10 @@ class WebOsClient:
             with suppress(WebOsTvResponseTypeError):
                 self.tv_info.system = await self.get_system_info()
 
-        self.tv_info.software = await self.get_software_info()
+        # Try to get software info, most likely to fail with new handshake
+        with suppress(WebOsTvResponseTypeError):
+            self.tv_info.software = await self.get_software_info()
+
         with suppress(WebOsTvServiceNotFoundError):
             self.tv_info.connection = await self.get_connection_info()
 
