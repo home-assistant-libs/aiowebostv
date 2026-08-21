@@ -268,7 +268,7 @@ class WebOsClient:
             with suppress(WebOsTvResponseTypeError):
                 self.tv_info.system = await self.get_system_info()
 
-        # Try to get software info; will fail if TV was paired with legacy handshake
+        # Try to get software info, most likely to fail with new handshake
         with suppress(WebOsTvResponseTypeError):
             self.tv_info.software = await self.get_software_info()
 
