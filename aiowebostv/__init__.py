@@ -1,6 +1,10 @@
 """Provide a package for controlling LG webOS based TVs."""
 
-from .exceptions import WebOsTvCommandError, WebOsTvPairError
+from .exceptions import (
+    WebOsTvCommandError,
+    WebOsTvPairError,
+    WebOsTvServiceNotFoundError,
+)
 from .models import WebOsTvInfo, WebOsTvState
 from .webos_client import WebOsClient
 
@@ -9,5 +13,6 @@ __all__ = [
     "WebOsTvCommandError",
     "WebOsTvInfo",
     "WebOsTvPairError",
+    "WebOsTvServiceNotFoundError",
     "WebOsTvState",
 ]
