@@ -313,9 +313,25 @@ class WebOsClient:
         main_ws: ClientWebSocketResponse | None,
         input_ws: ClientWebSocketResponse | None,
     ) -> None:
-        """Cancel all tasks and close connections."""
-        closeout = set()
+        """Close connections and cancel all tasks."""
 
+        # Keep the receive tasks alive while performing the WebSocket closing
+        # handshakes. Cancelling aiohttp's receive() first marks the connection
+        # as an abnormal closure (1006), preventing close() from completing a
+        # normal CLOSE/CLOSE handshake with the TV.
+        #
+        # Close the input socket first because it belongs to the main SSAP
+        # session, then close the main socket.
+        for web_socket in (input_ws, main_ws):
+            if web_socket is None or web_socket.closed:
+                continue
+            close_task = asyncio.create_task(web_socket.close())
+            while not close_task.done():
+                with suppress(asyncio.CancelledError):
+                    await asyncio.shield(close_task)
+            close_task.result()
+
+        closeout = set()
         self._cancel_tasks()
 
         if callback_tasks := set(self.callback_tasks.values()):
@@ -323,10 +339,6 @@ class WebOsClient:
 
         closeout.update(self._rx_tasks)
 
-        if main_ws is not None:
-            closeout.add(asyncio.create_task(main_ws.close()))
-        if input_ws is not None:
-            closeout.add(asyncio.create_task(input_ws.close()))
         if self.created_client_session:
             closeout.add(asyncio.create_task(self.close_client_session()))
 
