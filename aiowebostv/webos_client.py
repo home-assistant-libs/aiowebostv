@@ -24,7 +24,7 @@ from .exceptions import (
     WebOsTvResponseTypeError,
     WebOsTvServiceNotFoundError,
 )
-from .handshake import REGISTRATION_MESSAGE
+from .handshake import SIGNED_REGISTRATION_MESSAGE, UNSIGNED_REGISTRATION_MESSAGE
 from .models import WebOsTvInfo, WebOsTvState
 
 CONNECT_TIMEOUT = 2  # Timeout for connecting to the TV
@@ -44,6 +44,10 @@ WSS_PORT = 3001
 _LOGGER = logging.getLogger(__package__)
 
 
+class _ManifestRejectedError(WebOsTvPairError):
+    """Tv rejected the manifest without prompting the user."""
+
+
 class WebOsClient:
     """webOS TV client class."""
 
@@ -58,6 +62,7 @@ class WebOsClient:
         """Initialize the client."""
         self.host = host
         self.client_key = client_key
+        self.signed_manifest = True
         self.command_count: int = 0
         self.timeout_connect = connect_timeout
         self.heartbeat = heartbeat
@@ -130,7 +135,10 @@ class WebOsClient:
 
     def registration_msg(self) -> dict[str, Any]:
         """Create registration message."""
-        handshake = copy.deepcopy(REGISTRATION_MESSAGE)
+        if self.signed_manifest:
+            handshake = copy.deepcopy(SIGNED_REGISTRATION_MESSAGE)
+        else:
+            handshake = copy.deepcopy(UNSIGNED_REGISTRATION_MESSAGE)
         handshake["payload"]["client-key"] = self.client_key  # type: ignore[index]
         return handshake
 
@@ -223,6 +231,9 @@ class WebOsClient:
             response = await ws.receive_json()
         _LOGGER.debug("recv(%s): registration", self.host)
 
+        if response["type"] == "error":
+            raise _ManifestRejectedError(response["error"])
+
         if (
             response["type"] == "response"
             and response["payload"]["pairingType"] == "PROMPT"
@@ -237,12 +248,31 @@ class WebOsClient:
             )
             if response["type"] == "error":
                 raise WebOsTvPairError(response["error"])
-            if response["type"] == "registered":
-                self.client_key = response["payload"]["client-key"]
+
+        if response["type"] == "registered":
+            self.client_key = response["payload"]["client-key"]
 
         if not self.client_key:
             error = "Client key not set, pairing failed."
             raise WebOsTvPairError(error)
+
+    async def _create_registered_main_ws(self) -> ClientWebSocketResponse:
+        """Create main websocket connection and register with the tv."""
+        ws = await self._create_main_ws()
+        try:
+            await self._get_hello_info(ws)
+            await self._get_pre_reg_system_info(ws)
+            await self._check_registration(ws)
+        except BaseException as ex:
+            await ws.close()
+            if not isinstance(ex, _ManifestRejectedError) or not self.signed_manifest:
+                raise
+            # Retry unsigned, this tv rejects the signed manifest outright
+            _LOGGER.debug("register(%s): %s", self.host, ex)
+            self.signed_manifest = False
+            return await self._create_registered_main_ws()
+
+        return ws
 
     async def _create_input_ws(self) -> ClientWebSocketResponse:
         """Create input websocket connection.
@@ -268,7 +298,7 @@ class WebOsClient:
             with suppress(WebOsTvResponseTypeError):
                 self.tv_info.system = await self.get_system_info()
 
-        # Try to get software info, most likely to fail with new handshake
+        # Software info is unavailable with the unsigned manifest
         with suppress(WebOsTvResponseTypeError):
             self.tv_info.software = await self.get_software_info()
 
@@ -359,10 +389,7 @@ class WebOsClient:
         input_ws: ClientWebSocketResponse | None = None
         self._ensure_client_session()
         try:
-            main_ws = await self._create_main_ws()
-            await self._get_hello_info(main_ws)
-            await self._get_pre_reg_system_info(main_ws)
-            await self._check_registration(main_ws)
+            main_ws = await self._create_registered_main_ws()
             self._rx_tasks.add(asyncio.create_task(self._rx_msgs_main_ws(main_ws)))
             self.connection = main_ws
             input_ws = await self._create_input_ws()
