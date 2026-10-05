@@ -223,9 +223,14 @@ class WebOsClient:
             response = await ws.receive_json()
         _LOGGER.debug("recv(%s): registration", self.host)
 
-        if (
+        if response["type"] == "error":
+            raise WebOsTvPairError(response["error"])
+
+        if response["type"] == "registered":
+            self.client_key = response["payload"]["client-key"]
+        elif (
             response["type"] == "response"
-            and response["payload"]["pairingType"] == "PROMPT"
+            and response.get("payload", {}).get("pairingType") == "PROMPT"
         ):
             response = await ws.receive_json(timeout=RECEIVE_TIMEOUT)
             _LOGGER.debug("recv(%s): pairing", self.host)
