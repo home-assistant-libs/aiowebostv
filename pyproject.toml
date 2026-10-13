@@ -66,6 +66,15 @@ lint.ignore = [
     "T201",     # `print` found
     "T203",     # `pprint` found
 ]
+"tests/*" = [
+    "D104",     # Missing docstring in public package
+    "S101",     # Use of `assert` detected
+    "SLF001",   # Private member accessed
+    "ARG002",   # Unused method argument
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [tool.tox]
 legacy_tox_ini = """
@@ -80,6 +89,13 @@ python =
   3.12: py312
   3.13: py313
   3.14: py314
+
+[testenv]
+deps =
+  -rrequirements.txt
+  -rrequirements_test.txt
+commands =
+  pytest {posargs:tests}
 
 [testenv:lint]
 basepython = python3
