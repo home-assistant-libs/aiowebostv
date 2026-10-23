@@ -12,6 +12,7 @@ from contextlib import suppress
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlsplit
 
 import aiohttp
 from aiohttp import ClientSession, ClientWebSocketResponse, WSMsgType
@@ -66,6 +67,7 @@ class WebOsClient:
         self.connect_task: Task | None = None
         self.connect_result: Future[bool] | None = None
         self.connection: ClientWebSocketResponse | None = None
+        self._main_ws_uri: str | None = None
         self.input_connection: ClientWebSocketResponse | None = None
         self.futures: dict[int, Future[dict[str, Any]]] = {}
         self.tv_state = WebOsTvState()
@@ -168,12 +170,14 @@ class WebOsClient:
         """
         try:
             uri = f"ws://{self.host}:{WS_PORT}"
-            return await self._ws_connect(uri, MAIN_WS_MAX_MSG_SIZE)
+            main_ws = await self._ws_connect(uri, MAIN_WS_MAX_MSG_SIZE)
         # ClientConnectionError is raised when firmware reject WS_PORT
         # WSServerHandshakeError is raised when firmware enforce using ssl
         except (aiohttp.ClientConnectionError, aiohttp.WSServerHandshakeError):
             uri = f"wss://{self.host}:{WSS_PORT}"
-            return await self._ws_connect(uri, MAIN_WS_MAX_MSG_SIZE)
+            main_ws = await self._ws_connect(uri, MAIN_WS_MAX_MSG_SIZE)
+        self._main_ws_uri = uri
+        return main_ws
 
     def _ensure_client_session(self) -> None:
         """Create a new client session if no client session provided."""
@@ -249,10 +253,19 @@ class WebOsClient:
 
         Open additional connection needed to send button commands
         The url is dynamically generated and returned from the ep.INPUT_SOCKET
-        endpoint on the main connection.
+        endpoint on the main connection. Only its path is used: the connection
+        goes to the same scheme, host and port as the main connection, so the
+        TV's reply cannot direct the client to another host.
         """
+        if TYPE_CHECKING:
+            assert self._main_ws_uri is not None
+
         sockres = await self.request(ep.INPUT_SOCKET)
-        inputsockpath = sockres["socketPath"]
+        socket_url = urlsplit(sockres["socketPath"])
+        socket_path = socket_url.path
+        if socket_url.query:
+            socket_path = f"{socket_path}?{socket_url.query}"
+        inputsockpath = f"{self._main_ws_uri}{socket_path}"
         return await self._ws_connect(inputsockpath, INPUT_WS_MAX_MSG_SIZE)
 
     async def _get_states_and_subscribe_state_updates(self) -> None:
