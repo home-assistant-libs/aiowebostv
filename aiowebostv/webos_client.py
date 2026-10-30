@@ -130,8 +130,8 @@ class WebOsClient:
 
     def registration_msg(self) -> dict[str, Any]:
         """Create registration message."""
-        handshake = copy.deepcopy(REGISTRATION_MESSAGE)
-        handshake["payload"]["client-key"] = self.client_key  # type: ignore[index]
+        handshake: dict[str, Any] = copy.deepcopy(REGISTRATION_MESSAGE)
+        handshake["payload"]["client-key"] = self.client_key
         return handshake
 
     async def _ws_connect(self, uri: str, max_msg_size: int) -> ClientWebSocketResponse:
@@ -967,7 +967,7 @@ class WebOsClient:
     async def get_volume(self) -> int | None:
         """Get the current volume."""
         res = await self.request(ep.GET_VOLUME)
-        return res.get("volumeStatus", res).get("volume")  # type: ignore[no-any-return]
+        return res.get("volumeStatus", res).get("volume")
 
     async def subscribe_volume(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to changes in the current volume."""

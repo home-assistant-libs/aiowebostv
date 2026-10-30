@@ -1,26 +1,52 @@
+[![codecov](https://codecov.io/gh/home-assistant-libs/aiowebostv/graph/badge.svg)](https://codecov.io/gh/home-assistant-libs/aiowebostv)
+[![ci](https://img.shields.io/github/actions/workflow/status/home-assistant-libs/aiowebostv/test.yml?branch=main&label=CI&logo=github&style=flat-square)](https://github.com/home-assistant-libs/aiowebostv/actions/workflows/test.yml?query=branch%3Amain)
+
 # aiowebostv
+
 Python library to control LG webOS based TV devices.
 
 Based on:
-- `aiopylgtv` library at https://github.com/bendavid/aiopylgtv
-- `bscpylgtv` library at https://github.com/chros73/bscpylgtv
+
+- `aiopylgtv` library at <https://github.com/bendavid/aiopylgtv>
+- `bscpylgtv` library at <https://github.com/chros73/bscpylgtv>
 
 ## Requirements
-- Python >= 3.11
+
+- Python >= 3.12
 
 ## Install
+
 ```bash
 pip install aiowebostv
 ```
 
 ## Install from Source
+
 Run the following command inside this folder
+
 ```bash
 pip install --upgrade .
 ```
 
+## Prepare the development environment
+
+Run the following commands inside this folder (requires [uv](https://docs.astral.sh/uv/))
+
+```bash
+uv sync --all-groups
+uv run prek install
+```
+
+Run all checks (lint, type checking and tests) with
+
+```bash
+uv run tox
+```
+
 ## Examples
-### Basic Example:
+
+### Basic Example
+
 ```python
 import asyncio
 from pprint import pprint
@@ -51,7 +77,8 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-### Subscribed State Updates Example:
+### Subscribed State Updates Example
+
 ```python
 import asyncio
 import dataclasses

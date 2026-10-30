@@ -9,47 +9,51 @@ license = "Apache-2.0"
 description="Library to control webOS based LG TV devices"
 readme = "README.md"
 authors = [{ name = "Home Assistant Team", email = "hello@home-assistant.io" }]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Natural Language :: English",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "Topic :: Home Automation",
 ]
 dependencies = [
   "aiohttp>=3.11",
 ]
 
+[dependency-groups]
+lint = [
+  "prek==0.5.9",
+  "pydocstyle==6.3.0",
+  "ruff==0.17.3",
+  "ty==0.0.95",
+]
+dev = [
+  "pytest-asyncio==1.4.1",
+  "pytest-cov==7.1.0",
+  "pytest==9.2.0",
+  "tox==4.67.4",
+  "tox-gh-actions==3.5.0",
+]
+
 [project.urls]
 "Source code" = "https://github.com/home-assistant-libs/aiowebostv"
 
-[tool.mypy]
-python_version = "3.11"
-show_error_codes = true
-follow_imports = "silent"
-ignore_missing_imports = true
-strict_equality = true
-warn_incomplete_stub = true
-warn_redundant_casts = true
-warn_unused_configs = true
-warn_unused_ignores = true
-check_untyped_defs = true
-disallow_incomplete_defs = true
-disallow_subclassing_any = true
-disallow_untyped_calls = true
-disallow_untyped_decorators = true
-disallow_untyped_defs = true
-no_implicit_optional = true
-warn_return_any = true
-warn_unreachable = true
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.ty.src]
+include = ["aiowebostv"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 
 lint.select = ["ALL"]
 
@@ -66,38 +70,71 @@ lint.ignore = [
     "T201",     # `print` found
     "T203",     # `pprint` found
 ]
+"tests/**/*" = [
+    "PLR0913",  # Too many arguments
+    "PLR0917",  # Too many positional arguments
+    "PLR2004",  # Magic value used in comparison
+    "S101",     # Use of `assert` detected
+    "SLF001",   # Private member accessed
+]
 
 [tool.tox]
 legacy_tox_ini = """
 
 [tox]
-envlist = py311, py312, py313, py314, lint, mypy
+envlist = py312, py313, py314, py315, lint, prek, ty, tests
 skip_missing_interpreters = True
+
+[testenv]
+setenv =
+    UV_PROJECT_ENVIRONMENT = {envdir}
 
 [gh-actions]
 python =
-  3.11: py311, lint, mypy
-  3.12: py312
-  3.13: py313
-  3.14: py314
+  3.12: py312, tests, lint, prek, ty
+  3.13: py313, tests
+  3.14: py314, tests
+  3.15: py315, tests
 
 [testenv:lint]
-basepython = python3
+skip_install = true
+allowlist_externals = uv
 ignore_errors = True
 commands =
-  ruff format --check ./
-  ruff check ./
-  pydocstyle aiowebostv
-deps =
-  -rrequirements.txt
-  -rrequirements_lint.txt
+  uv sync --all-groups --frozen
+  uv run ruff format --check ./
+  uv run ruff check ./
+  uv run pydocstyle aiowebostv
 
-[testenv:mypy]
-basepython = python3
+[testenv:prek]
+skip_install = true
+allowlist_externals = uv
 ignore_errors = True
 commands =
-  mypy aiowebostv
-deps =
-  -rrequirements.txt
-  -rrequirements_lint.txt
+  uv sync --all-groups --frozen
+  uv run prek run \
+    trailing-whitespace \
+    end-of-file-fixer \
+    check-yaml \
+    check-json \
+    check-toml \
+    mixed-line-ending \
+    yamllint \
+    --all-files
+
+[testenv:ty]
+skip_install = true
+allowlist_externals = uv
+ignore_errors = True
+commands =
+  uv sync --all-groups --frozen
+  uv run ty check
+
+[testenv:tests]
+skip_install = true
+allowlist_externals = uv
+ignore_errors = True
+commands =
+  uv sync --all-groups --frozen
+  uv run python -m pytest --cov=aiowebostv --cov-report=xml --cov-report=term-missing
 """

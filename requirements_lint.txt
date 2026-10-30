@@ -1,3 +1,0 @@
-mypy==2.3.1
-pydocstyle==6.3.0
-ruff==0.16.7
