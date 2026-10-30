@@ -1,3 +1,6 @@
+[![codecov](https://codecov.io/gh/home-assistant-libs/aiowebostv/graph/badge.svg)](https://codecov.io/gh/home-assistant-libs/aiowebostv)
+[![ci](https://img.shields.io/github/actions/workflow/status/home-assistant-libs/aiowebostv/test.yml?branch=main&label=CI&logo=github&style=flat-square)](https://github.com/home-assistant-libs/aiowebostv/actions/workflows/test.yml?query=branch%3Amain)
+
 # aiowebostv
 
 Python library to control LG webOS based TV devices.
