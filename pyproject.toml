@@ -18,6 +18,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "Topic :: Home Automation",
 ]
 dependencies = [
@@ -68,7 +69,7 @@ lint.ignore = [
 legacy_tox_ini = """
 
 [tox]
-envlist = py312, py313, py314, lint, prek, ty
+envlist = py312, py313, py314, py315, lint, prek, ty
 skip_missing_interpreters = True
 
 [testenv]
@@ -80,6 +81,7 @@ python =
   3.12: py312, lint, prek, ty
   3.13: py313
   3.14: py314
+  3.15: py315
 
 [testenv:lint]
 skip_install = true
