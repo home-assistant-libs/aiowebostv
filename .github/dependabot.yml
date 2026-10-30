@@ -4,9 +4,13 @@
 # https://help.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
 
 version: 2
-enable-beta-ecosystems: true # Required to use the pre-commit ecosystem
+enable-beta-ecosystems: true  # Required to use the pre-commit ecosystem
 multi-ecosystem-groups:
   ruff:
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+  ty-checker:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
@@ -16,8 +20,8 @@ updates:
     schedule:
       interval: daily
     open-pull-requests-limit: 10
-  - package-ecosystem: "pip"
-    directory: "/" # Location of package manifests
+  - package-ecosystem: "uv"
+    directory: "/"  # Location of package manifests
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
@@ -28,9 +32,11 @@ updates:
     groups:
       pre-commit:
         patterns: ["*"]
-        exclude-patterns: ["*/astral-sh/ruff-pre-commit"]
-  # Keep ruff in requirements and pre-commit in sync with a single PR
-  - package-ecosystem: "pip"
+        exclude-patterns:
+          - "*/astral-sh/ruff-pre-commit"
+          - "*/astral-sh/ty-pre-commit"
+  # Keep ruff and ty in uv.lock and pre-commit in sync with a single PR
+  - package-ecosystem: "uv"
     directory: "/"
     patterns: ["ruff"]
     multi-ecosystem-group: "ruff"
@@ -38,3 +44,11 @@ updates:
     directory: "/"
     patterns: ["*/astral-sh/ruff-pre-commit"]
     multi-ecosystem-group: "ruff"
+  - package-ecosystem: "uv"
+    directory: "/"
+    patterns: ["ty"]
+    multi-ecosystem-group: "ty-checker"
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    patterns: ["*/astral-sh/ty-pre-commit"]
+    multi-ecosystem-group: "ty-checker"
