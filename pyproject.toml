@@ -99,7 +99,15 @@ allowlist_externals = uv
 ignore_errors = True
 commands =
   uv sync --all-groups --frozen
-  uv run prek run     trailing-whitespace     end-of-file-fixer     check-yaml     check-json     check-toml     mixed-line-ending     yamllint     --all-files
+  uv run prek run \
+    trailing-whitespace \
+    end-of-file-fixer \
+    check-yaml \
+    check-json \
+    check-toml \
+    mixed-line-ending \
+    yamllint \
+    --all-files
 
 [testenv:ty]
 skip_install = true
