@@ -26,7 +26,7 @@ repos:
     rev: v3.22.0
     hooks:
       - id: pyupgrade
-        args: ["--py311-plus"]
+        args: ["--py312-plus"]
   - repo: https://github.com/PyCQA/pydocstyle
     rev: 6.3.0
     hooks:
