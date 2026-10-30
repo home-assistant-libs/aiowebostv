@@ -33,12 +33,18 @@ lint = [
   "ty==0.0.95",
 ]
 dev = [
+  "pytest-asyncio==1.4.1",
+  "pytest-cov==7.1.0",
+  "pytest==9.2.0",
   "tox==4.67.4",
   "tox-gh-actions==3.5.0",
 ]
 
 [project.urls]
 "Source code" = "https://github.com/home-assistant-libs/aiowebostv"
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ty.environment]
 python-version = "3.12"
@@ -64,12 +70,19 @@ lint.ignore = [
     "T201",     # `print` found
     "T203",     # `pprint` found
 ]
+"tests/**/*" = [
+    "PLR0913",  # Too many arguments
+    "PLR0917",  # Too many positional arguments
+    "PLR2004",  # Magic value used in comparison
+    "S101",     # Use of `assert` detected
+    "SLF001",   # Private member accessed
+]
 
 [tool.tox]
 legacy_tox_ini = """
 
 [tox]
-envlist = py312, py313, py314, py315, lint, prek, ty
+envlist = py312, py313, py314, py315, lint, prek, ty, tests
 skip_missing_interpreters = True
 
 [testenv]
@@ -78,10 +91,10 @@ setenv =
 
 [gh-actions]
 python =
-  3.12: py312, lint, prek, ty
-  3.13: py313
-  3.14: py314
-  3.15: py315
+  3.12: py312, tests, lint, prek, ty
+  3.13: py313, tests
+  3.14: py314, tests
+  3.15: py315, tests
 
 [testenv:lint]
 skip_install = true
@@ -116,4 +129,12 @@ ignore_errors = True
 commands =
   uv sync --all-groups --frozen
   uv run ty check
+
+[testenv:tests]
+skip_install = true
+allowlist_externals = uv
+ignore_errors = True
+commands =
+  uv sync --all-groups --frozen
+  uv run python -m pytest --cov=aiowebostv --cov-report=xml --cov-report=term-missing
 """
