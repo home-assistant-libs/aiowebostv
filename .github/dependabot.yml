@@ -5,6 +5,11 @@
 
 version: 2
 enable-beta-ecosystems: true # Required to use the pre-commit ecosystem
+multi-ecosystem-groups:
+  ruff:
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -23,3 +28,13 @@ updates:
     groups:
       pre-commit:
         patterns: ["*"]
+        exclude-patterns: ["*/astral-sh/ruff-pre-commit"]
+  # Keep ruff in requirements and pre-commit in sync with a single PR
+  - package-ecosystem: "pip"
+    directory: "/"
+    patterns: ["ruff"]
+    multi-ecosystem-group: "ruff"
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    patterns: ["*/astral-sh/ruff-pre-commit"]
+    multi-ecosystem-group: "ruff"
