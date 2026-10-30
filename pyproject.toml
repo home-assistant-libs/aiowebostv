@@ -9,13 +9,12 @@ license = "Apache-2.0"
 description="Library to control webOS based LG TV devices"
 readme = "README.md"
 authors = [{ name = "Home Assistant Team", email = "hello@home-assistant.io" }]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Natural Language :: English",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
@@ -41,13 +40,13 @@ dev = [
 "Source code" = "https://github.com/home-assistant-libs/aiowebostv"
 
 [tool.ty.environment]
-python-version = "3.11"
+python-version = "3.12"
 
 [tool.ty.src]
 include = ["aiowebostv"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 
 lint.select = ["ALL"]
 
@@ -69,7 +68,7 @@ lint.ignore = [
 legacy_tox_ini = """
 
 [tox]
-envlist = py311, py312, py313, py314, lint, prek, ty
+envlist = py312, py313, py314, lint, prek, ty
 skip_missing_interpreters = True
 
 [testenv]
@@ -78,8 +77,7 @@ setenv =
 
 [gh-actions]
 python =
-  3.11: py311, lint, prek, ty
-  3.12: py312
+  3.12: py312, lint, prek, ty
   3.13: py313
   3.14: py314
 
