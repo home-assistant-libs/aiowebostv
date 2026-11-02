@@ -289,9 +289,17 @@ class WebOsClient:
         for state_update in subscribe_state_updates:
             subscribe_tasks.add(asyncio.create_task(state_update))
         await asyncio.wait(subscribe_tasks)
+        first_exc: Exception | None = None
         for task in subscribe_tasks:
-            with suppress(WebOsTvServiceNotFoundError):
+            try:
                 task.result()
+            except WebOsTvServiceNotFoundError:
+                pass
+            except Exception as err:  # noqa: BLE001
+                if first_exc is None:
+                    first_exc = err
+        if first_exc is not None:
+            raise first_exc
         self.do_state_update = True
         await self.do_state_update_callbacks()
 

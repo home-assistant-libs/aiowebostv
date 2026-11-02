@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import gc
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -805,3 +806,30 @@ async def test_not_connected(client: WebOsClient) -> None:
         await client.button("ENTER")
 
     assert client.futures == {}
+
+
+async def test_multiple_subscribe_failures_retrieve_all_task_exceptions(
+    client: WebOsClient, fake_tv: FakeTv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test multiple simultaneous subscription failures retrieve all task exceptions."""
+    monkeypatch.setattr(webos_client, "REQUEST_TIMEOUT", 0.05)
+    fake_tv.responses[ep.GET_SOUND_OUTPUT] = None
+    fake_tv.responses.pop(ep.GET_VOLUME, None)
+    fake_tv.responses.pop(ep.GET_APPS, None)
+
+    unhandled_exceptions: list[dict[str, Any]] = []
+    loop = asyncio.get_running_loop()
+    orig_handler = loop.get_exception_handler()
+    loop.set_exception_handler(
+        lambda _loop, context: unhandled_exceptions.append(context)
+    )
+    try:
+        with pytest.raises(WebOsTvCommandTimeoutError):
+            await client.connect()
+        await assert_disconnected(client)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(orig_handler)
+
+    assert unhandled_exceptions == []
