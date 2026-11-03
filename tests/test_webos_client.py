@@ -827,6 +827,9 @@ async def test_multiple_subscribe_failures_retrieve_all_task_exceptions(
         with pytest.raises(WebOsTvCommandTimeoutError):
             await client.connect()
         await assert_disconnected(client)
+        # connect_result holds the raised exception, whose traceback references
+        # the subscribe tasks; drop it so unretrieved exceptions get collected.
+        client.connect_result = None
         gc.collect()
         await asyncio.sleep(0)
     finally:
