@@ -339,8 +339,8 @@ class WebOsClient:
         self.do_state_update = False
         self.tv_state.clear()
 
-        for callback in self.state_update_callbacks:
-            closeout.add(asyncio.create_task(callback(self.tv_state)))
+        if self.state_update_callbacks:
+            closeout.add(asyncio.create_task(self._call_state_update_callbacks()))
 
         if not closeout:
             return
@@ -466,8 +466,21 @@ class WebOsClient:
         if not self.state_update_callbacks or not self.do_state_update:
             return
 
+        await self._call_state_update_callbacks()
+
+    async def _call_state_update_callbacks(self) -> None:
+        """Call user state update callbacks and log any errors.
+
+        A failing callback must not propagate, it would stop the
+        subscription handler that triggered the update.
+        """
         callbacks = {cb(self.tv_state) for cb in self.state_update_callbacks}
-        await asyncio.gather(*callbacks)
+        results = await asyncio.gather(*callbacks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                _LOGGER.error(
+                    "state update callback(%s): error", self.host, exc_info=result
+                )
 
     def _is_tv_on(self) -> bool:
         """Return true if TV is powered on."""

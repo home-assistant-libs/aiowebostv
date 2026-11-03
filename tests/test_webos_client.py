@@ -343,6 +343,40 @@ async def test_unregister_and_clear_callbacks(client: WebOsClient) -> None:
     assert client.state_update_callbacks == []
 
 
+async def test_failing_callback_does_not_stop_state_updates(
+    client: WebOsClient, fake_tv: FakeTv, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test a failing state update callback is logged and updates continue."""
+    failing_callback = AsyncMock(side_effect=RuntimeError("boom"))
+    await client.register_state_update_callback(failing_callback)
+
+    unhandled_exceptions: list[dict[str, Any]] = []
+    loop = asyncio.get_running_loop()
+    orig_handler = loop.get_exception_handler()
+    loop.set_exception_handler(
+        lambda _loop, context: unhandled_exceptions.append(context)
+    )
+    try:
+        assert await client.connect()
+        for volume in (30, 31):
+            await push_and_wait(
+                client,
+                fake_tv,
+                ep.GET_VOLUME,
+                {"volumeStatus": {"volume": volume}},
+                lambda state, volume=volume: state.volume == volume,
+            )
+        await client.disconnect()
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(orig_handler)
+
+    assert unhandled_exceptions == []
+    assert "state update callback" in caplog.text
+    assert "RuntimeError: boom" in caplog.text
+
+
 @pytest.mark.parametrize(
     ("uri", "payload", "attribute", "expected"),
     [
