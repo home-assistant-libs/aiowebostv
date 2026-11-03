@@ -285,14 +285,13 @@ class WebOsClient:
             self.subscribe_sound_output(self.set_sound_output_state),
             self.subscribe_media_foreground_app(self.set_media_state),
         }
-        subscribe_tasks = set()
-        for state_update in subscribe_state_updates:
-            subscribe_tasks.add(asyncio.create_task(state_update))
-        await asyncio.wait(subscribe_tasks)
+        # gather retrieves every task exception and cancels the remaining
+        # tasks if we are cancelled (e.g. disconnect during connect)
+        results = await asyncio.gather(*subscribe_state_updates, return_exceptions=True)
         errors = [
             exc
-            for task in subscribe_tasks
-            if (exc := task.exception())
+            for exc in results
+            if isinstance(exc, Exception)
             and not isinstance(exc, WebOsTvServiceNotFoundError)
         ]
         if errors:
