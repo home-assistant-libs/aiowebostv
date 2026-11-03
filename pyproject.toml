@@ -36,7 +36,7 @@ dev = [
   "pytest-asyncio==1.4.1",
   "pytest-cov==7.1.0",
   "pytest==9.2.0",
-  "tox==4.67.4",
+  "tox==4.67.5",
   "tox-gh-actions==3.5.0",
 ]
 
