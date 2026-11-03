@@ -125,6 +125,7 @@ class WebOsClient:
             self.connect_task_active()
             and self.connect_result is not None
             and self.connect_result.done()
+            and self.connect_result.exception() is None
             and self.connect_result.result()
         )
 

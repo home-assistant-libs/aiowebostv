@@ -146,6 +146,20 @@ async def test_invalid_hello_response(client: WebOsClient, fake_tv: FakeTv) -> N
     await assert_disconnected(client)
 
 
+async def test_is_connected_during_failed_connect_closeout(
+    client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test is_connected does not raise while a failed connection closes out."""
+    fake_tv.hello_type = "error"
+
+    with pytest.raises(WebOsTvCommandError):
+        await client.connect()
+
+    assert client.connect_task_active()
+    assert not client.is_connected()
+    await assert_disconnected(client)
+
+
 async def test_connect_timeout(
     client: WebOsClient, fake_tv: FakeTv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
