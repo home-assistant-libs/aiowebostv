@@ -289,9 +289,14 @@ class WebOsClient:
         for state_update in subscribe_state_updates:
             subscribe_tasks.add(asyncio.create_task(state_update))
         await asyncio.wait(subscribe_tasks)
-        for task in subscribe_tasks:
-            with suppress(WebOsTvServiceNotFoundError):
-                task.result()
+        errors = [
+            exc
+            for task in subscribe_tasks
+            if (exc := task.exception())
+            and not isinstance(exc, WebOsTvServiceNotFoundError)
+        ]
+        if errors:
+            raise errors[0]
         self.do_state_update = True
         await self.do_state_update_callbacks()
 
