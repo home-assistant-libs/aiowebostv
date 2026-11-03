@@ -836,3 +836,31 @@ async def test_multiple_subscribe_failures_retrieve_all_task_exceptions(
         loop.set_exception_handler(orig_handler)
 
     assert unhandled_exceptions == []
+
+
+async def test_disconnect_during_subscribe_retrieves_task_exceptions(
+    client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test disconnect during initial subscribe retrieves failed task exceptions."""
+    fake_tv.responses[ep.GET_SOUND_OUTPUT] = None
+    fake_tv.responses.pop(ep.GET_VOLUME, None)
+
+    unhandled_exceptions: list[dict[str, Any]] = []
+    loop = asyncio.get_running_loop()
+    orig_handler = loop.get_exception_handler()
+    loop.set_exception_handler(
+        lambda _loop, context: unhandled_exceptions.append(context)
+    )
+    try:
+        connect_task = asyncio.create_task(client.connect())
+        await fake_tv.wait_for_message("subscribe", ep.GET_SOUND_OUTPUT)
+        await fake_tv.wait_for_message("subscribe", ep.GET_VOLUME)
+        await asyncio.sleep(0.01)
+        await client.disconnect()
+        assert await connect_task is False
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(orig_handler)
+
+    assert unhandled_exceptions == []
