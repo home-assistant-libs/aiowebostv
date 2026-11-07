@@ -17,6 +17,7 @@ CLIENT_KEY = "valid-client-key"
 NEW_CLIENT_KEY = "new-client-key"
 
 NOT_FOUND = "404 no such service or method"
+APPLICATION_ERROR = "500 Application error"
 
 
 def default_responses() -> dict[str, dict[str, Any] | None]:
@@ -61,7 +62,9 @@ class FakeTv:
         self.respond_to_hello = True
         # "accept", "reject" or "no_key", used when the client key is not valid
         self.pairing = "accept"
-        # uri -> payload; None responds with a 404 error, missing uri never responds
+        # uri -> payload; None responds with a 404 error, a payload
+        # with an errorCode with an application error, missing uri
+        # never responds
         self.responses = default_responses()
         self.received: list[dict[str, Any]] = []
         self.input_received: asyncio.Queue[str] = asyncio.Queue()
@@ -195,6 +198,17 @@ class FakeTv:
         if (payload := self.responses[uri]) is None:
             await ws.send_json(
                 {"type": "error", "id": msg_id, "error": NOT_FOUND, "payload": {}}
+            )
+            return
+
+        if "errorCode" in payload:
+            await ws.send_json(
+                {
+                    "type": "error",
+                    "id": msg_id,
+                    "error": APPLICATION_ERROR,
+                    "payload": payload,
+                }
             )
             return
 

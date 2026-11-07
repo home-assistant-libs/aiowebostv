@@ -41,6 +41,9 @@ INPUT_WS_MAX_MSG_SIZE = 8 * 1024  # 8KB, not expecting any messages
 WS_PORT = 3000
 WSS_PORT = 3001
 
+# "passive" can leave the TV unable to turn the screen back on
+LEGACY_SCREEN_PAYLOAD = {"standbyMode": "active"}
+
 _LOGGER = logging.getLogger(__package__)
 
 
@@ -80,6 +83,8 @@ class WebOsClient:
         self._rx_tasks: set[Task] = set()
         self._subscriptions: dict[str, int] = {}
         self._prefer_wss = True
+        self._legacy_screen = False
+        self._screen_off = False
 
     async def connect(self) -> bool:
         """Connect to webOS TV device."""
@@ -374,6 +379,7 @@ class WebOsClient:
         self.futures = {}
         self._subscriptions = {}
         self.command_count = 0
+        self._screen_off = False
         self.tv_info.clear()
         main_ws: ClientWebSocketResponse | None = None
         input_ws: ClientWebSocketResponse | None = None
@@ -514,15 +520,25 @@ class WebOsClient:
 
     def _is_screen_on(self) -> bool:
         """Return true if screen is on."""
-        if self.tv_state.is_on:
-            return self.tv_state.power_state.get("state") != "Screen Off"
-        return False
+        if not self.tv_state.is_on:
+            return False
+        if self._screen_off:
+            # the tv.power service reports no screen state of its own
+            return False
+        return self.tv_state.power_state.get("state") != "Screen Off"
+
+    def _update_on_state(self) -> None:
+        """Set the TV and screen on state."""
+        self.tv_state.is_on = self._is_tv_on()
+        if not self.tv_state.is_on:
+            # the screen is on again when the TV is turned on
+            self._screen_off = False
+        self.tv_state.is_screen_on = self._is_screen_on()
 
     async def set_power_state(self, payload: dict[str, bool | str]) -> None:
         """Set TV power state callback."""
         self.tv_state.power_state = payload
-        self.tv_state.is_on = self._is_tv_on()
-        self.tv_state.is_screen_on = self._is_screen_on()
+        self._update_on_state()
         await self.do_state_update_callbacks()
 
     async def set_current_app_state(self, app_id: str) -> None:
@@ -534,8 +550,7 @@ class WebOsClient:
         can only succeed after channels have been configured.
         """
         self.tv_state.current_app_id = app_id
-        self.tv_state.is_on = self._is_tv_on()
-        self.tv_state.is_screen_on = self._is_screen_on()
+        self._update_on_state()
 
         if self.tv_state.channels is None:
             with suppress(WebOsTvCommandError):
@@ -939,7 +954,35 @@ class WebOsClient:
         """Set screen on or off."""
         if self.tv_state.is_screen_on == on:
             return
-        await self.request(ep.TURN_ON_SCREEN if on else ep.TURN_OFF_SCREEN)
+        if self._legacy_screen:
+            await self._set_legacy_screen_state(on)
+            return
+        try:
+            await self.request(ep.TURN_ON_SCREEN if on else ep.TURN_OFF_SCREEN)
+        except WebOsTvServiceNotFoundError:
+            _LOGGER.debug(
+                "set_screen_state(%s): no tvpower service, using tv.power",
+                self.host,
+            )
+            await self._set_legacy_screen_state(on)
+
+    async def _set_legacy_screen_state(self, on: bool) -> None:  # noqa: FBT001
+        """Set screen on or off through the tv.power service."""
+        if on:
+            try:
+                await self.request(ep.TURN_ON_SCREEN_LEGACY, LEGACY_SCREEN_PAYLOAD)
+            except WebOsTvServiceNotFoundError:
+                raise
+            except WebOsTvResponseTypeError:
+                # the TV answers with an error but turns the screen on
+                _LOGGER.debug("set_screen_state(%s): turn on error ignored", self.host)
+        else:
+            await self.request(ep.TURN_OFF_SCREEN_LEGACY, LEGACY_SCREEN_PAYLOAD)
+        # this service works and pushes no screen state, so track it here
+        self._legacy_screen = True
+        self._screen_off = not on
+        self.tv_state.is_screen_on = on
+        await self.do_state_update_callbacks()
 
     # Inputs
     async def get_inputs(self) -> dict[str, Any] | None:
