@@ -221,6 +221,9 @@ async def fake_tv(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[FakeTv]:
     assert server.port is not None
     tv.port = server.port
     monkeypatch.setattr(webos_client, "WS_PORT", server.port)
+    # The fake TV only speaks ws://, the initial wss:// attempt fails the TLS
+    # handshake and the client falls back to ws://
+    monkeypatch.setattr(webos_client, "WSS_PORT", server.port)
     yield tv
     await server.close()
 

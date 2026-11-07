@@ -79,6 +79,7 @@ class WebOsClient:
         self.callback_tasks: dict[int, Task] = {}
         self._rx_tasks: set[Task] = set()
         self._subscriptions: dict[str, int] = {}
+        self._prefer_wss = True
 
     async def connect(self) -> bool:
         """Connect to webOS TV device."""
@@ -165,16 +166,30 @@ class WebOsClient:
     async def _create_main_ws(self) -> ClientWebSocketResponse:
         """Create main websocket connection.
 
-        Try using ws:// and fallback to wss:// if the TV rejects the connection.
+        Try wss:// first and fall back to ws:// if it fails. Newer firmware may
+        reject ws:// or leave its handshake hanging after power on, while older
+        webOS versions only support ws://. The scheme that connected last is
+        tried first on the next connection.
         """
+        wss_uri = f"wss://{self.host}:{WSS_PORT}"
+        ws_uri = f"ws://{self.host}:{WS_PORT}"
+        first, second = (wss_uri, ws_uri) if self._prefer_wss else (ws_uri, wss_uri)
         try:
-            uri = f"ws://{self.host}:{WS_PORT}"
-            return await self._ws_connect(uri, MAIN_WS_MAX_MSG_SIZE)
-        # ClientConnectionError is raised when firmware reject WS_PORT
-        # WSServerHandshakeError is raised when firmware enforce using ssl
-        except (aiohttp.ClientConnectionError, aiohttp.WSServerHandshakeError):
-            uri = f"wss://{self.host}:{WSS_PORT}"
-            return await self._ws_connect(uri, MAIN_WS_MAX_MSG_SIZE)
+            return await self._ws_connect(first, MAIN_WS_MAX_MSG_SIZE)
+        # ClientConnectionError: port closed/reset or TLS error
+        # WSServerHandshakeError: firmware enforces the other scheme
+        # TimeoutError: port accepts TCP but never answers the handshake
+        except (
+            aiohttp.ClientConnectionError,
+            aiohttp.WSServerHandshakeError,
+            TimeoutError,
+        ) as err:
+            _LOGGER.debug(
+                "connect(%s): %s failed (%r), falling back", self.host, first, err
+            )
+        main_ws = await self._ws_connect(second, MAIN_WS_MAX_MSG_SIZE)
+        self._prefer_wss = second == wss_uri
+        return main_ws
 
     def _ensure_client_session(self) -> None:
         """Create a new client session if no client session provided."""
