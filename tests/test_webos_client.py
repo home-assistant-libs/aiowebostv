@@ -136,6 +136,58 @@ async def test_pairing_failed(fake_tv: FakeTv, pairing: str) -> None:
     assert client.client_key is None
 
 
+def registrations(fake_tv: FakeTv) -> list[dict[str, Any]]:
+    """Return the manifests of all registration requests."""
+    return [
+        msg["payload"]["manifest"]
+        for msg in fake_tv.received
+        if msg["type"] == "register"
+    ]
+
+
+async def test_registration_signed_manifest(
+    connected_client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test a TV accepting the signed manifest registers with it."""
+    assert connected_client.signed_manifest
+    (manifest,) = registrations(fake_tv)
+    assert "signatures" in manifest
+    assert "READ_UPDATE_INFO" in manifest["signed"]["permissions"]
+
+
+async def test_registration_signed_manifest_rejected(
+    client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test a rejected signed manifest retries unsigned on the same socket."""
+    fake_tv.reject_signed = True
+
+    assert await client.connect()
+
+    assert not client.signed_manifest
+    assert [msg["type"] for msg in fake_tv.received].count("hello") == 1
+    signed, unsigned = registrations(fake_tv)
+    assert "signatures" in signed
+    assert list(unsigned) == ["appVersion", "manifestVersion", "permissions"]
+    assert len(unsigned["permissions"]) == 37
+    assert unsigned["permissions"] == sorted(unsigned["permissions"])
+    assert "READ_UPDATE_INFO" in unsigned["permissions"]
+
+
+async def test_registration_unsigned_after_rejection(
+    client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test the next connect after a rejection sends the unsigned manifest."""
+    fake_tv.reject_signed = True
+    assert await client.connect()
+    await client.disconnect()
+    fake_tv.received.clear()
+
+    assert await client.connect()
+
+    (manifest,) = registrations(fake_tv)
+    assert "signatures" not in manifest
+
+
 async def test_invalid_hello_response(client: WebOsClient, fake_tv: FakeTv) -> None:
     """Test an invalid hello response fails the connection."""
     fake_tv.hello_type = "error"

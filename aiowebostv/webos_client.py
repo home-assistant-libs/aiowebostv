@@ -58,6 +58,7 @@ class WebOsClient:
         """Initialize the client."""
         self.host = host
         self.client_key = client_key
+        self.signed_manifest = True
         self.command_count: int = 0
         self.timeout_connect = connect_timeout
         self.heartbeat = heartbeat
@@ -132,6 +133,13 @@ class WebOsClient:
     def registration_msg(self) -> dict[str, Any]:
         """Create registration message."""
         handshake: dict[str, Any] = copy.deepcopy(REGISTRATION_MESSAGE)
+        if not self.signed_manifest:
+            # Newer firmware rejects the signature, send the unsigned manifest
+            manifest = handshake["payload"]["manifest"]
+            manifest.pop("signatures")
+            manifest["permissions"] = sorted(
+                {*manifest["permissions"], *manifest.pop("signed")["permissions"]}
+            )
         handshake["payload"]["client-key"] = self.client_key
         return handshake
 
@@ -216,13 +224,25 @@ class WebOsClient:
         with suppress(WebOsTvResponseTypeError):
             self.tv_info.system = self._parse_response(response)
 
-    async def _check_registration(self, ws: ClientWebSocketResponse) -> None:
-        """Check if the client is registered with the tv."""
+    async def _send_registration(self, ws: ClientWebSocketResponse) -> dict[str, Any]:
+        """Send the registration message and return the first response."""
         _LOGGER.debug("send(%s): registration", self.host)
         await ws.send_json(self.registration_msg())
         async with asyncio.timeout(RECEIVE_TIMEOUT):
             response = await ws.receive_json()
         _LOGGER.debug("recv(%s): registration", self.host)
+        return response
+
+    async def _check_registration(self, ws: ClientWebSocketResponse) -> None:
+        """Check if the client is registered with the tv."""
+        response = await self._send_registration(ws)
+        if response["type"] == "error" and self.signed_manifest:
+            # Newer firmware rejects the signed manifest, retry unsigned
+            _LOGGER.debug(
+                "register(%s): %s, retrying unsigned", self.host, response["error"]
+            )
+            self.signed_manifest = False
+            response = await self._send_registration(ws)
 
         if (
             response["type"] == "response"
@@ -269,7 +289,7 @@ class WebOsClient:
             with suppress(WebOsTvResponseTypeError):
                 self.tv_info.system = await self.get_system_info()
 
-        # Try to get software info, most likely to fail with new handshake
+        # Software info is unavailable with the unsigned manifest
         with suppress(WebOsTvResponseTypeError):
             self.tv_info.software = await self.get_software_info()
 
