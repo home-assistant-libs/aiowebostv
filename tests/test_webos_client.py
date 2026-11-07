@@ -196,21 +196,90 @@ async def test_connect_unreachable(
         await assert_disconnected(client)
 
 
-@pytest.mark.parametrize(
-    "error", [aiohttp.ClientConnectionError(), aiohttp.WSServerHandshakeError(None, ())]
-)
-async def test_main_ws_falls_back_to_wss(error: Exception) -> None:
-    """Test the main websocket falls back to wss when ws is rejected."""
+MAIN_WS_ERRORS = [
+    aiohttp.ClientConnectionError(),
+    aiohttp.WSServerHandshakeError(None, ()),
+    TimeoutError(),
+]
+
+
+def _uris(ws_connect: AsyncMock) -> list[str]:
+    """Return the URIs passed to a patched _ws_connect."""
+    return [call.args[0] for call in ws_connect.call_args_list]
+
+
+async def test_main_ws_prefers_wss() -> None:
+    """Test the main websocket tries wss first and keeps using it."""
     client = WebOsClient(HOST)
+    wss_uri = f"wss://{HOST}:{webos_client.WSS_PORT}"
+
+    with patch.object(client, "_ws_connect", return_value=object()) as ws_connect:
+        await client._create_main_ws()
+        await client._create_main_ws()
+
+    assert _uris(ws_connect) == [wss_uri, wss_uri]
+
+
+@pytest.mark.parametrize("error", MAIN_WS_ERRORS)
+async def test_main_ws_falls_back_to_ws_and_remembers(error: Exception) -> None:
+    """Test falling back to ws when wss fails, and preferring ws afterwards."""
+    client = WebOsClient(HOST)
+    wss_uri = f"wss://{HOST}:{webos_client.WSS_PORT}"
+    ws_uri = f"ws://{HOST}:{webos_client.WS_PORT}"
     ws = object()
 
-    with patch.object(client, "_ws_connect", side_effect=[error, ws]) as ws_connect:
+    with patch.object(client, "_ws_connect", side_effect=[error, ws, ws]) as ws_connect:
+        assert await client._create_main_ws() is ws
         assert await client._create_main_ws() is ws
 
-    assert [call.args[0] for call in ws_connect.call_args_list] == [
-        f"ws://{HOST}:{webos_client.WS_PORT}",
-        f"wss://{HOST}:{webos_client.WSS_PORT}",
-    ]
+    assert _uris(ws_connect) == [wss_uri, ws_uri, ws_uri]
+
+
+@pytest.mark.parametrize("error", MAIN_WS_ERRORS)
+async def test_main_ws_falls_back_to_wss_after_ws_preference(error: Exception) -> None:
+    """Test returning to wss when the remembered ws scheme fails."""
+    client = WebOsClient(HOST)
+    wss_uri = f"wss://{HOST}:{webos_client.WSS_PORT}"
+    ws_uri = f"ws://{HOST}:{webos_client.WS_PORT}"
+    ws = object()
+
+    with patch.object(
+        client,
+        "_ws_connect",
+        side_effect=[aiohttp.ClientConnectionError(), ws, error, ws, ws],
+    ) as ws_connect:
+        for _ in range(3):
+            assert await client._create_main_ws() is ws
+
+    assert _uris(ws_connect) == [wss_uri, ws_uri, ws_uri, wss_uri, wss_uri]
+
+
+async def test_main_ws_both_schemes_fail_keeps_preference() -> None:
+    """Test a failure on both schemes raises and keeps the preferred scheme."""
+    client = WebOsClient(HOST)
+    wss_uri = f"wss://{HOST}:{webos_client.WSS_PORT}"
+    ws_uri = f"ws://{HOST}:{webos_client.WS_PORT}"
+
+    with patch.object(
+        client,
+        "_ws_connect",
+        side_effect=[TimeoutError(), TimeoutError(), object()],
+    ) as ws_connect:
+        with pytest.raises(TimeoutError):
+            await client._create_main_ws()
+        await client._create_main_ws()
+
+    assert _uris(ws_connect) == [wss_uri, ws_uri, wss_uri]
+
+
+async def test_connect_falls_back_to_ws(fake_tv: FakeTv) -> None:  # noqa: ARG001
+    """Test connecting to a ws-only TV falls back and remembers ws."""
+    client = WebOsClient(HOST, CLIENT_KEY)
+    try:
+        assert await client.connect()
+        assert client._prefer_wss is False
+    finally:
+        await client.disconnect()
 
 
 async def test_disconnect(connected_client: WebOsClient) -> None:
