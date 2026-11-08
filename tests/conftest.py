@@ -64,6 +64,8 @@ class FakeTv:
         self.respond_to_hello = True
         # "accept", "reject" or "no_key", used when the client key is not valid
         self.pairing = "accept"
+        # Reject a signed manifest, like firmware with a blacklisted signature
+        self.reject_signed = False
         # uri -> payload; None responds with a 404 error, a payload
         # with an errorCode with an application error, missing uri
         # never responds
@@ -144,6 +146,17 @@ class FakeTv:
     ) -> None:
         """Respond to a registration request."""
         msg_id = data["id"]
+        if self.reject_signed and "signatures" in data["payload"]["manifest"]:
+            await ws.send_json(
+                {
+                    "type": "error",
+                    "id": msg_id,
+                    "error": "403 Pairing rejected: blacklisted certificate detected",
+                    "payload": {},
+                }
+            )
+            return
+
         if data["payload"].get("client-key") == CLIENT_KEY:
             await ws.send_json(
                 {
