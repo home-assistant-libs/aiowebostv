@@ -832,6 +832,32 @@ async def test_set_screen_state_not_known(
     assert connected_client.tv_state.screen_state_reported is True
 
 
+async def test_set_screen_state_already_set(
+    connected_client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test the error for a screen that is already on is ignored."""
+    fake_tv.responses[ep.TURN_ON_SCREEN] = {
+        "errorCode": "-102",
+        "errorText": "The current sub state must be 'screen off'",
+    }
+
+    await connected_client.set_screen_state(on=True)
+
+    assert connected_client.tv_state.screen_state_reported is True
+
+
+async def test_set_screen_state_error(
+    connected_client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test an error changing the screen state is not suppressed."""
+    fake_tv.responses[ep.TURN_OFF_SCREEN] = {"errorCode": "-1", "errorText": "Error"}
+
+    with pytest.raises(WebOsTvResponseTypeError):
+        await connected_client.set_screen_state(on=False)
+
+    assert connected_client.tv_state.screen_state_reported is None
+
+
 async def test_set_screen_state_not_reported(
     connected_client: WebOsClient, fake_tv: FakeTv
 ) -> None:

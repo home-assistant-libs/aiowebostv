@@ -956,6 +956,10 @@ class WebOsClient:
             self.tv_state.screen_state_reported = False
             await self._set_legacy_screen_state(on)
             return
+        except WebOsTvResponseTypeError:
+            # the TV refuses to set the screen state it is already in
+            if self.tv_state.is_screen_on != on:
+                raise
         self.tv_state.screen_state_reported = True
 
     async def _set_legacy_screen_state(self, on: bool) -> None:  # noqa: FBT001
