@@ -254,28 +254,33 @@ class WebOsClient:
         if response["type"] == "error" and self.signed_manifest:
             # Newer firmware rejects the signed manifest, retry unsigned
             _LOGGER.debug(
-                "register(%s): %s, retrying unsigned", self.host, response["error"]
+                "register(%s): %s, retrying unsigned",
+                self.host,
+                response.get("error"),
             )
             self.signed_manifest = False
             response = await self._send_registration(ws)
 
         if (
             response["type"] == "response"
-            and response["payload"]["pairingType"] == "PROMPT"
+            and response.get("payload", {}).get("pairingType") == "PROMPT"
         ):
             response = await ws.receive_json(timeout=RECEIVE_TIMEOUT)
             _LOGGER.debug("recv(%s): pairing", self.host)
-            _LOGGER.debug(
-                "pairing(%s): type: %s, error: %s",
-                self.host,
-                response["type"],
-                response.get("error"),
+        _LOGGER.debug(
+            "pairing(%s): type: %s, error: %s",
+            self.host,
+            response["type"],
+            response.get("error"),
+        )
+        if response["type"] == "error":
+            raise WebOsTvPairError(response.get("error", "Pairing failed"))
+        if response["type"] == "registered":
+            # Keep the stored key if the TV sends no new one, so a
+            # reconnect that works today keeps working.
+            self.client_key = (
+                response.get("payload", {}).get("client-key") or self.client_key
             )
-            if response["type"] == "error":
-                raise WebOsTvPairError(response["error"])
-            if response["type"] == "registered":
-                self.client_key = response["payload"]["client-key"]
-
         if not self.client_key:
             error = "Client key not set, pairing failed."
             raise WebOsTvPairError(error)

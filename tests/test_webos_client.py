@@ -136,6 +136,85 @@ async def test_pairing_failed(fake_tv: FakeTv, pairing: str) -> None:
     assert client.client_key is None
 
 
+@pytest.mark.parametrize(
+    ("frames", "client_key", "error"),
+    [
+        (
+            [
+                {
+                    "type": "error",
+                    "error": "403 Pairing rejected: blacklisted certificate detected",
+                }
+            ],
+            None,
+            "403 Pairing rejected",
+        ),
+        (
+            [{"type": "registered", "payload": {"client-key": "direct-key"}}],
+            "direct-key",
+            None,
+        ),
+        (
+            [{"type": "response", "payload": {}}],
+            None,
+            "Client key not set, pairing failed.",
+        ),
+        (
+            [{"type": "error"}],
+            None,
+            "Pairing failed",
+        ),
+    ],
+)
+async def test_check_registration_first_frame(
+    frames: list[dict[str, Any]], client_key: str | None, error: str | None
+) -> None:
+    """Test _check_registration handles the first frame by type."""
+    ws = AsyncMock()
+    ws.receive_json.side_effect = frames
+    client = WebOsClient(HOST)
+    # Skip the signed-manifest retry: that path is covered by the
+    # registration tests, this test is about the frame-type dispatch.
+    client.signed_manifest = False
+
+    if error is None:
+        await client._check_registration(ws)
+    else:
+        with pytest.raises(WebOsTvPairError, match=error):
+            await client._check_registration(ws)
+
+    assert client.client_key == client_key
+
+
+async def test_check_registration_registered_without_key_keeps_stored_key() -> None:
+    """Test a registered frame without a key keeps the stored key."""
+    ws = AsyncMock()
+    ws.receive_json.side_effect = [{"type": "registered", "payload": {}}]
+    client = WebOsClient(HOST)
+    client.client_key = "stored-key"
+    client.signed_manifest = False
+
+    await client._check_registration(ws)
+
+    assert client.client_key == "stored-key"
+
+
+async def test_check_registration_both_manifests_rejected() -> None:
+    """Test the second rejection raises the TV's own message."""
+    ws = AsyncMock()
+    ws.receive_json.side_effect = [
+        {"type": "error", "error": "403 Pairing rejected: signed manifest"},
+        {"type": "error", "error": "403 Pairing rejected: unsigned manifest"},
+    ]
+    client = WebOsClient(HOST)
+
+    with pytest.raises(WebOsTvPairError, match="unsigned manifest"):
+        await client._check_registration(ws)
+
+    assert not client.signed_manifest
+    assert client.client_key is None
+
+
 def registrations(fake_tv: FakeTv) -> list[dict[str, Any]]:
     """Return the manifests of all registration requests."""
     return [
