@@ -816,6 +816,97 @@ async def test_set_screen_state_legacy_fallback(
     assert connected_client.tv_state.is_screen_on is True
 
 
+async def test_screen_state_support_probed_on_connect(
+    client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test the TV is probed once for screen state support on connect."""
+    fake_tv.responses[ep.TURN_ON_SCREEN] = None
+    fake_tv.responses[ep.TURN_OFF_SCREEN_LEGACY] = {"returnValue": True}
+
+    assert await client.connect()
+
+    assert f"ssap://{ep.TURN_ON_SCREEN}" in fake_tv.received_uris()
+    assert client.tv_state.screen_state_reported is False
+    request_count = len(fake_tv.received_uris())
+
+    await client.set_screen_state(on=False)
+
+    # the probe already ruled out tvpower, so it is not tried again
+    assert fake_tv.received_uris()[request_count:] == [
+        f"ssap://{ep.TURN_OFF_SCREEN_LEGACY}"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("power_state", "probe_response", "reported", "probed"),
+    [
+        ({"state": "Active"}, {"returnValue": True}, True, True),
+        ({"state": "Active"}, {"errorCode": "-102"}, True, True),
+        ({"state": "Active"}, None, False, True),
+        ({"state": "Screen Off"}, None, True, False),
+        ({"state": "Active", "processing": "Screen On"}, None, None, False),
+        ({"state": "Suspend"}, None, None, False),
+    ],
+)
+async def test_screen_state_support_detection(
+    client: WebOsClient,
+    fake_tv: FakeTv,
+    power_state: dict[str, Any],
+    probe_response: dict[str, Any] | None,
+    reported: bool | None,  # noqa: FBT001
+    probed: bool,  # noqa: FBT001
+) -> None:
+    """Test what the power state tells us about screen state support."""
+    fake_tv.responses[ep.GET_POWER_STATE] = {**power_state, "returnValue": True}
+    fake_tv.responses[ep.TURN_ON_SCREEN] = probe_response
+
+    assert await client.connect()
+
+    assert client.tv_state.screen_state_reported is reported
+    assert (f"ssap://{ep.TURN_ON_SCREEN}" in fake_tv.received_uris()) is probed
+
+
+async def test_screen_state_support_probed_when_tv_turns_on(
+    client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test a TV that is off when connecting is probed once it is on."""
+    fake_tv.responses[ep.GET_POWER_STATE] = {"state": "Suspend", "returnValue": True}
+    assert await client.connect()
+    assert client.tv_state.screen_state_reported is None
+
+    await push_and_wait(
+        client,
+        fake_tv,
+        ep.GET_POWER_STATE,
+        {"state": "Active"},
+        lambda state: state.screen_state_reported is True,
+    )
+
+
+@pytest.mark.parametrize("reported", [None, False])
+async def test_set_screen_state_without_reported_state(
+    client: WebOsClient,
+    fake_tv: FakeTv,
+    reported: bool | None,  # noqa: FBT001
+) -> None:
+    """Test the command is always sent when the screen state is a guess."""
+    fake_tv.responses[ep.GET_POWER_STATE] = {"state": "Suspend", "returnValue": True}
+    fake_tv.responses[ep.TURN_OFF_SCREEN] = None
+    fake_tv.responses[ep.TURN_OFF_SCREEN_LEGACY] = {"returnValue": True}
+    assert await client.connect()
+    if reported is False:
+        await client.set_screen_state(on=False)
+    assert client.tv_state.screen_state_reported is reported
+    request_count = len(fake_tv.received_uris())
+
+    # is_screen_on already says off, but a guess may not block the command
+    await client.set_screen_state(on=False)
+
+    assert (
+        f"ssap://{ep.TURN_OFF_SCREEN_LEGACY}" in fake_tv.received_uris()[request_count:]
+    )
+
+
 async def test_legacy_screen_state_tracking(
     connected_client: WebOsClient, fake_tv: FakeTv
 ) -> None:
@@ -866,8 +957,7 @@ async def test_set_screen_state_legacy_error(
         await connected_client.set_screen_state(on=False)
 
     assert connected_client.tv_state.is_screen_on is True
-    # the service did not work, so tvpower is tried again next time
-    assert connected_client._legacy_screen is False
+    assert connected_client.tv_state.screen_state_reported is False
 
 
 async def test_set_screen_state_legacy_not_found(
@@ -888,7 +978,7 @@ async def test_set_screen_state_legacy_not_found(
         await connected_client.set_screen_state(on=True)
 
     assert connected_client.tv_state.is_screen_on is False
-    assert connected_client._legacy_screen is False
+    assert connected_client.tv_state.screen_state_reported is False
 
 
 @pytest.mark.parametrize(

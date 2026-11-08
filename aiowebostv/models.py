@@ -36,6 +36,9 @@ class WebOsTvState:
     current_channel: dict[str, Any] | None = None
     channel_info: dict[str, Any] | None = None
     channels: list[dict[str, Any]] | None = None
+    # None until known, False when the TV does not report it
+    # (webOS 4.x), is_screen_on is then a guess
+    screen_state_reported: bool | None = None
     # Calculated fields
     is_on: bool = False
     is_screen_on: bool = False
