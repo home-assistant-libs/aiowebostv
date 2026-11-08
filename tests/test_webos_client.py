@@ -136,6 +136,51 @@ async def test_pairing_failed(fake_tv: FakeTv, pairing: str) -> None:
     assert client.client_key is None
 
 
+@pytest.mark.parametrize(
+    ("frames", "client_key", "error"),
+    [
+        (
+            [
+                {
+                    "type": "error",
+                    "error": "403 Pairing rejected: blacklisted certificate detected",
+                }
+            ],
+            None,
+            "403 Pairing rejected",
+        ),
+        (
+            [{"type": "registered", "payload": {"client-key": "direct-key"}}],
+            "direct-key",
+            None,
+        ),
+        (
+            [{"type": "response", "payload": {}}],
+            None,
+            "Client key not set, pairing failed.",
+        ),
+    ],
+)
+async def test_check_registration_first_frame(
+    frames: list[dict[str, Any]], client_key: str | None, error: str | None
+) -> None:
+    """Test _check_registration handles the first frame by type."""
+    ws = AsyncMock()
+    ws.receive_json.side_effect = frames
+    client = WebOsClient(HOST)
+    # Skip the signed-manifest retry: that path is covered by the
+    # registration tests, this test is about the frame-type dispatch.
+    client.signed_manifest = False
+
+    if error is None:
+        await client._check_registration(ws)
+    else:
+        with pytest.raises(WebOsTvPairError, match=error):
+            await client._check_registration(ws)
+
+    assert client.client_key == client_key
+
+
 def registrations(fake_tv: FakeTv) -> list[dict[str, Any]]:
     """Return the manifests of all registration requests."""
     return [
