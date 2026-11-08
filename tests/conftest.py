@@ -27,8 +27,6 @@ def default_responses() -> dict[str, dict[str, Any] | None]:
         ep.GET_SOFTWARE_INFO: {"product_name": "webOSTV 6.0", "returnValue": True},
         ep.GET_CONNECTION_INFO: {"wifiInfo": {}, "returnValue": True},
         ep.GET_POWER_STATE: {"state": "Active", "returnValue": True},
-        # answers the screen state support probe on connect
-        ep.TURN_ON_SCREEN: {"returnValue": True},
         ep.GET_CURRENT_APP_INFO: {"appId": "com.webos.app.hdmi1", "returnValue": True},
         ep.GET_AUDIO_STATUS: {"mute": False, "returnValue": True},
         ep.GET_VOLUME: {"volumeStatus": {"volume": 10}, "returnValue": True},
