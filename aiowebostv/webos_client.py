@@ -259,28 +259,22 @@ class WebOsClient:
             self.signed_manifest = False
             response = await self._send_registration(ws)
 
-        if response["type"] == "error":
-            raise WebOsTvPairError(response["error"])
-
-        if response["type"] == "registered":
-            self.client_key = response["payload"]["client-key"]
-        elif (
+        if (
             response["type"] == "response"
             and response.get("payload", {}).get("pairingType") == "PROMPT"
         ):
             response = await ws.receive_json(timeout=RECEIVE_TIMEOUT)
             _LOGGER.debug("recv(%s): pairing", self.host)
-            _LOGGER.debug(
-                "pairing(%s): type: %s, error: %s",
-                self.host,
-                response["type"],
-                response.get("error"),
-            )
-            if response["type"] == "error":
-                raise WebOsTvPairError(response["error"])
-            if response["type"] == "registered":
-                self.client_key = response["payload"]["client-key"]
-
+        _LOGGER.debug(
+            "pairing(%s): type: %s, error: %s",
+            self.host,
+            response["type"],
+            response.get("error"),
+        )
+        if response["type"] == "error":
+            raise WebOsTvPairError(response["error"])
+        if response["type"] == "registered":
+            self.client_key = response["payload"]["client-key"]
         if not self.client_key:
             error = "Client key not set, pairing failed."
             raise WebOsTvPairError(error)
