@@ -542,8 +542,8 @@ class WebOsClient:
             return
         await self.do_state_update_callbacks()
 
-    async def _has_screen_service(self) -> bool:
-        """Return true if the tvpower screen service exists."""
+    async def _has_screen_service(self) -> bool | None:
+        """Return if the tvpower screen service exists, None if unknown."""
         try:
             # the power state says the screen is on, so this is a no-op
             await self.request(ep.TURN_ON_SCREEN)
@@ -552,6 +552,10 @@ class WebOsClient:
         except WebOsTvResponseTypeError:
             # an error frame still proves the service exists
             return True
+        except WebOsTvCommandError as err:
+            # the next settled power state probes again
+            _LOGGER.debug("screen state probe(%s) failed: %r", self.host, err)
+            return None
         return True
 
     async def set_current_app_state(self, app_id: str) -> None:

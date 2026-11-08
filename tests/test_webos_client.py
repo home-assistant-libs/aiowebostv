@@ -850,6 +850,7 @@ async def test_screen_state_support_probed_on_connect(
         ({"state": "Active"}, {"returnValue": True}, True, True),
         ({"state": "Active"}, {"errorCode": "-102"}, True, True),
         ({"state": "Active"}, None, False, True),
+        ({"state": "Active"}, {"returnValue": False}, None, True),
         ({"state": "Screen Off"}, None, True, False),
         ({"state": "Active", "processing": "Screen On"}, None, None, False),
         ({"state": "Suspend"}, None, None, False),
