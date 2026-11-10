@@ -32,7 +32,7 @@ repos:
     hooks:
       - id: pydocstyle
   - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: v0.0.95
+    rev: v0.0.99
     hooks:
       - id: ty
   - repo: https://github.com/codespell-project/codespell
