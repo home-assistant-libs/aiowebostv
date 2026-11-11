@@ -29,6 +29,7 @@ class WebOsTvState:
     sound_output: str | None = None
     muted: bool | None = None
     volume: int | None = None
+    volume_status: dict[str, Any] | None = None
     apps: dict[str, Any] = field(default_factory=dict)
     inputs: dict[str, Any] = field(default_factory=dict)
     media_state: list[dict[str, Any]] = field(default_factory=list)

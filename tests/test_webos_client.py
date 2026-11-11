@@ -85,6 +85,7 @@ async def test_connect(connected_client: WebOsClient, fake_tv: FakeTv) -> None:
     assert state.is_screen_on
     assert state.current_app_id == "com.webos.app.hdmi1"
     assert state.volume == 10
+    assert state.volume_status == {"volume": 10}
     assert state.muted is False
     assert state.sound_output == "tv_speaker"
     assert list(state.apps) == ["netflix"]
@@ -595,6 +596,34 @@ async def test_failing_callback_does_not_stop_state_updates(
     ("uri", "payload", "attribute", "expected"),
     [
         (ep.GET_VOLUME, {"volumeStatus": {"volume": 20}}, "volume", 20),
+        (ep.GET_VOLUME, {"volume": 21, "supportvolume": False}, "volume", 21),
+        (
+            ep.GET_VOLUME,
+            {
+                "volumeStatus": {
+                    "volume": 22,
+                    "soundOutput": "external_arc",
+                    "volumeSyncable": False,
+                }
+            },
+            "volume_status",
+            {"volume": 22, "soundOutput": "external_arc", "volumeSyncable": False},
+        ),
+        (
+            ep.GET_VOLUME,
+            {
+                "volume": 23,
+                "scenario": "mastervolume_tv_speaker",
+                "supportvolume": True,
+            },
+            "volume_status",
+            {
+                "volume": 23,
+                "scenario": "mastervolume_tv_speaker",
+                "supportvolume": True,
+                "returnValue": True,
+            },
+        ),
         (ep.GET_AUDIO_STATUS, {"mute": True}, "muted", True),
         (
             ep.GET_SOUND_OUTPUT,
@@ -633,6 +662,16 @@ async def test_subscription_updates(
         payload,
         lambda state: getattr(state, attribute) == expected,
     )
+
+
+async def test_subscribe_volume(connected_client: WebOsClient) -> None:
+    """Test subscribing to volume level changes and setting the volume state."""
+    callback = AsyncMock()
+    await connected_client.subscribe_volume(callback)
+    callback.assert_awaited_once_with(10)
+
+    await connected_client.set_volume_state(30)
+    assert connected_client.tv_state.volume == 30
 
 
 @pytest.mark.parametrize(
