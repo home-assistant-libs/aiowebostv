@@ -41,6 +41,9 @@ INPUT_WS_MAX_MSG_SIZE = 8 * 1024  # 8KB, not expecting any messages
 WS_PORT = 3000
 WSS_PORT = 3001
 
+# "passive" can leave the TV unable to turn the screen back on
+LEGACY_SCREEN_PAYLOAD = {"standbyMode": "active"}
+
 _LOGGER = logging.getLogger(__package__)
 
 
@@ -556,6 +559,36 @@ class WebOsClient:
         self.tv_state.is_on = self._is_tv_on()
         self.tv_state.is_screen_on = self._is_screen_on()
         await self.do_state_update_callbacks()
+        if self.tv_state.screen_state_reported is None:
+            await self._detect_screen_state_support()
+
+    async def _detect_screen_state_support(self) -> None:
+        """Detect whether the TV reports a screen off power state."""
+        power_state = self.tv_state.power_state
+        if power_state.get("state") == "Screen Off":
+            self.tv_state.screen_state_reported = True
+        elif power_state.get("state") == "Active" and "processing" not in power_state:
+            self.tv_state.screen_state_reported = await self._has_screen_service()
+        else:
+            # probe only once the power state has settled
+            return
+        await self.do_state_update_callbacks()
+
+    async def _has_screen_service(self) -> bool | None:
+        """Return if the tvpower screen service exists, None if unknown."""
+        try:
+            # the power state says the screen is on, so this is a no-op
+            await self.request(ep.TURN_ON_SCREEN)
+        except WebOsTvServiceNotFoundError:
+            return False
+        except WebOsTvResponseTypeError:
+            # an error frame still proves the service exists
+            return True
+        except WebOsTvCommandError as err:
+            # the next settled power state probes again
+            _LOGGER.debug("screen state probe(%s) failed: %r", self.host, err)
+            return None
+        return True
 
     async def set_current_app_state(self, app_id: str) -> None:
         """Set current app state variable.
@@ -975,9 +1008,46 @@ class WebOsClient:
 
     async def set_screen_state(self, on: bool) -> None:  # noqa: FBT001
         """Set screen on or off."""
-        if self.tv_state.is_screen_on == on:
+        if self.tv_state.screen_state_reported is False:
+            await self._set_legacy_screen_state(on)
             return
-        await self.request(ep.TURN_ON_SCREEN if on else ep.TURN_OFF_SCREEN)
+        if self.tv_state.screen_state_reported and self.tv_state.is_screen_on == on:
+            # the TV reports the screen state, so it is already set
+            return
+        try:
+            await self.request(ep.TURN_ON_SCREEN if on else ep.TURN_OFF_SCREEN)
+        except WebOsTvServiceNotFoundError:
+            _LOGGER.debug(
+                "set_screen_state(%s): no tvpower service, using tv.power",
+                self.host,
+            )
+            await self._set_legacy_screen_state(on)
+            return
+        except WebOsTvResponseTypeError:
+            # the TV refuses to set the screen state it is already in
+            if self.tv_state.is_screen_on != on:
+                raise
+        self.tv_state.screen_state_reported = True
+
+    async def _set_legacy_screen_state(self, on: bool) -> None:  # noqa: FBT001
+        """Set screen on or off through the tv.power service."""
+        if on:
+            try:
+                await self.request(ep.TURN_ON_SCREEN_LEGACY, LEGACY_SCREEN_PAYLOAD)
+            except WebOsTvServiceNotFoundError:
+                # a 404 carries no response to read an error code from
+                raise
+            except WebOsTvResponseTypeError as err:
+                # the TV answers POWER_ERROR_0005 but turns the screen on
+                if err.args[0]["payload"].get("errorCode") != "POWER_ERROR_0005":
+                    raise
+        else:
+            await self.request(ep.TURN_OFF_SCREEN_LEGACY, LEGACY_SCREEN_PAYLOAD)
+        # tv.power works, so this TV does not report the screen state
+        self.tv_state.screen_state_reported = False
+        # the TV reports no screen state, so assume the command worked
+        self.tv_state.is_screen_on = on
+        await self.do_state_update_callbacks()
 
     # Inputs
     async def get_inputs(self) -> dict[str, Any] | None:
