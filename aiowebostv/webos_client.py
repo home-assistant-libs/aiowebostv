@@ -614,7 +614,17 @@ class WebOsClient:
         This function also handles the channel info subscription,
         since that call may fail if channel information is not
         available when it's called.
+
+        The TV may send an error payload on this subscription, for example
+        a failed subscribe or "broadcastId ... is already closed" when the
+        broadcast ends. Clear the channel instead of storing the error.
         """
+        if channel.get("returnValue") is False:
+            _LOGGER.debug("current channel(%s): error payload %s", self.host, channel)
+            self.tv_state.current_channel = None
+            await self.do_state_update_callbacks()
+            return
+
         self.tv_state.current_channel = channel
 
         if self.tv_state.channel_info is None:

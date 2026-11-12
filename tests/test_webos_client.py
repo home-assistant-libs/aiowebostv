@@ -787,6 +787,70 @@ async def test_live_tv_channel_subscriptions(
     ]
 
 
+CHANNEL_ERROR = {
+    "returnValue": False,
+    "errorText": "broadcastId = 00000047 is already closed",
+}
+
+
+async def test_current_channel_failed_subscribe(
+    connected_client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test a failed current channel subscribe does not store the error."""
+    fake_tv.responses[ep.GET_CURRENT_CHANNEL] = CHANNEL_ERROR
+
+    # Wait for the failed subscription to be cleaned up before teardown
+    deleted = asyncio.Event()
+    delete_subscription_handler = connected_client.delete_subscription_handler
+
+    async def delete_and_signal(uri: str) -> None:
+        await delete_subscription_handler(uri)
+        if uri == ep.GET_CURRENT_CHANNEL:
+            deleted.set()
+
+    with (
+        patch("aiowebostv.webos_client.asyncio.sleep"),
+        patch.object(
+            connected_client, "delete_subscription_handler", delete_and_signal
+        ),
+    ):
+        await push_and_wait(
+            connected_client,
+            fake_tv,
+            ep.GET_CURRENT_APP_INFO,
+            {"appId": "com.webos.app.livetv"},
+            lambda state: (
+                state.current_app_id == "com.webos.app.livetv"
+                and state.current_channel is None
+            ),
+        )
+        await asyncio.wait_for(deleted.wait(), 1)
+
+    assert f"ssap://{ep.GET_CHANNEL_INFO}" not in fake_tv.received_uris()
+
+
+async def test_current_channel_error_update(
+    connected_client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test an error update on the current channel subscription clears it."""
+    with patch("aiowebostv.webos_client.asyncio.sleep"):
+        await push_and_wait(
+            connected_client,
+            fake_tv,
+            ep.GET_CURRENT_APP_INFO,
+            {"appId": "com.webos.app.livetv"},
+            lambda state: state.current_channel is not None,
+        )
+
+    await push_and_wait(
+        connected_client,
+        fake_tv,
+        ep.GET_CURRENT_CHANNEL,
+        CHANNEL_ERROR,
+        lambda state: state.current_channel is None,
+    )
+
+
 # Requests
 
 

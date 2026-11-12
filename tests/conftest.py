@@ -101,7 +101,7 @@ class FakeTv:
             {
                 "type": "response",
                 "id": self.subscriptions[uri],
-                "payload": {**payload, "returnValue": True},
+                "payload": {"returnValue": True, **payload},
             }
         )
 
