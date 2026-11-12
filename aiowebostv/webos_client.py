@@ -478,7 +478,14 @@ class WebOsClient:
     async def register_state_update_callback(
         self, callback: Callable[[WebOsTvState], Any]
     ) -> None:
-        """Register user state update callback."""
+        """Register user state update callback.
+
+        Do not await `disconnect()` from inside a callback. Connection
+        teardown waits for running callbacks to finish, while `disconnect()`
+        waits for the teardown, so the two would deadlock. To disconnect in
+        response to a state change, schedule it as a separate task instead,
+        e.g. `asyncio.create_task(client.disconnect())`.
+        """
         self.state_update_callbacks.append(callback)
         if self.do_state_update:
             await callback(self.tv_state)
