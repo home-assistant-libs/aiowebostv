@@ -1062,6 +1062,45 @@ async def test_subscribe_failure_cleans_up(
     assert ep.GET_SERVICES not in connected_client._subscriptions
 
 
+async def test_delete_subscription_handler_propagates_cancel(
+    client: WebOsClient,
+) -> None:
+    """Test deleting a subscription handler does not swallow our cancellation.
+
+    A failed subscribe deletes its handler from inside another callback task,
+    which disconnect() may cancel. Swallowing that cancel leaves the callback
+    task running and disconnect() waits for it forever.
+    """
+    in_callback = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_callback(_payload: dict[str, Any]) -> None:
+        in_callback.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            # Keep the handler busy after its cancel, so deleting it waits
+            await release.wait()
+            raise
+
+    await client.create_subscription_handler(ep.GET_SERVICES, 1, slow_callback)
+    client.callback_queues[1].put_nowait({"payload": {}})
+    await in_callback.wait()
+
+    delete_task = asyncio.create_task(
+        client.delete_subscription_handler(ep.GET_SERVICES)
+    )
+    await asyncio.sleep(0)
+    delete_task.cancel()
+    await asyncio.sleep(0)
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await delete_task
+    assert ep.GET_SERVICES not in client._subscriptions
+    assert 1 not in client.callback_queues
+
+
 @pytest.mark.parametrize(
     ("method", "args", "message"),
     [

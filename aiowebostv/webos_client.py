@@ -772,11 +772,18 @@ class WebOsClient:
         task = self.callback_tasks.pop(uid)
         if not task.done():
             task.cancel()
+        # Wait for the task to finish without swallowing our own cancellation,
+        # the caller may run in a callback task that disconnect() cancels.
+        cancelled = False
         while not task.done():
-            with suppress(asyncio.CancelledError):
-                await task
+            try:
+                await asyncio.wait({task})
+            except asyncio.CancelledError:
+                cancelled = True
         del self.callback_queues[uid]
         del self._subscriptions[uri]
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def subscribe(
         self, callback: Callable, uri: str, payload: dict[str, Any] | None = None
