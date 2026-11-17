@@ -30,10 +30,10 @@ lint = [
   "prek==0.5.10",
   "pydocstyle==6.3.0",
   "ruff==0.17.5",
-  "ty==0.0.99",
+  "ty==0.0.104",
 ]
 dev = [
-  "pytest-asyncio==1.4.1.post1",
+  "pytest-asyncio==1.5.0",
   "pytest-cov==7.1.0",
   "pytest==9.2.0",
   "tox==4.67.13",
