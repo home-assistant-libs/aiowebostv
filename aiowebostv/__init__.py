@@ -3,6 +3,7 @@
 from .exceptions import (
     WebOsTvCommandError,
     WebOsTvPairError,
+    WebOsTvRegistrationError,
     WebOsTvServiceNotFoundError,
 )
 from .models import WebOsTvInfo, WebOsTvState
@@ -13,6 +14,7 @@ __all__ = [
     "WebOsTvCommandError",
     "WebOsTvInfo",
     "WebOsTvPairError",
+    "WebOsTvRegistrationError",
     "WebOsTvServiceNotFoundError",
     "WebOsTvState",
 ]

@@ -18,6 +18,8 @@ NEW_CLIENT_KEY = "new-client-key"
 
 NOT_FOUND = "404 no such service or method"
 
+BOOT_ERROR = "400 prevent registering your device with TV"
+
 
 def default_responses() -> dict[str, dict[str, Any] | None]:
     """Return default request/subscribe payloads keyed by endpoint uri."""
@@ -63,6 +65,8 @@ class FakeTv:
         self.pairing = "accept"
         # Reject a signed manifest, like firmware with a blacklisted signature
         self.reject_signed = False
+        # Reject every registration, like a TV that is still booting
+        self.booting = False
         # uri -> payload; None responds with a 404 error, missing uri never responds
         self.responses = default_responses()
         self.received: list[dict[str, Any]] = []
@@ -141,6 +145,17 @@ class FakeTv:
     ) -> None:
         """Respond to a registration request."""
         msg_id = data["id"]
+        if self.booting:
+            await ws.send_json(
+                {
+                    "type": "error",
+                    "id": msg_id,
+                    "error": BOOT_ERROR,
+                    "payload": {},
+                }
+            )
+            return
+
         if self.reject_signed and "signatures" in data["payload"]["manifest"]:
             await ws.send_json(
                 {
