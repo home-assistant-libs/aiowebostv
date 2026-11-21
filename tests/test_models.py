@@ -22,6 +22,7 @@ def test_tv_state_clear() -> None:
         sound_output="tv_speaker",
         muted=True,
         volume=10,
+        volume_status={"volume": 10, "volumeSyncable": True},
         apps={"netflix": {}},
         inputs={"hdmi1": {}},
         media_state=[{"playState": "playing"}],

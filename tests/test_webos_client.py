@@ -16,6 +16,7 @@ from aiowebostv import (
     WebOsClient,
     WebOsTvCommandError,
     WebOsTvPairError,
+    WebOsTvRegistrationError,
     WebOsTvServiceNotFoundError,
     WebOsTvState,
     webos_client,
@@ -26,7 +27,7 @@ from aiowebostv.exceptions import (
     WebOsTvResponseTypeError,
 )
 
-from .conftest import CLIENT_KEY, HOST, NEW_CLIENT_KEY, NOT_FOUND, FakeTv
+from .conftest import BOOT_ERROR, CLIENT_KEY, HOST, NEW_CLIENT_KEY, NOT_FOUND, FakeTv
 
 pytestmark = pytest.mark.asyncio
 
@@ -91,6 +92,7 @@ async def test_connect(connected_client: WebOsClient, fake_tv: FakeTv) -> None:
     assert state.is_screen_on
     assert state.current_app_id == "com.webos.app.hdmi1"
     assert state.volume == 10
+    assert state.volume_status == {"volume": 10}
     assert state.muted is False
     assert state.sound_output == "tv_speaker"
     assert list(state.apps) == ["netflix"]
@@ -140,6 +142,120 @@ async def test_pairing_failed(fake_tv: FakeTv, pairing: str) -> None:
 
     await assert_disconnected(client)
     assert client.client_key is None
+
+
+@pytest.mark.parametrize(
+    ("frames", "client_key", "error"),
+    [
+        (
+            [
+                {
+                    "type": "error",
+                    "error": "403 Pairing rejected: blacklisted certificate detected",
+                }
+            ],
+            None,
+            "403 Pairing rejected",
+        ),
+        (
+            [{"type": "registered", "payload": {"client-key": "direct-key"}}],
+            "direct-key",
+            None,
+        ),
+        (
+            [{"type": "response", "payload": {}}],
+            None,
+            "Client key not set, pairing failed.",
+        ),
+        (
+            [{"type": "error"}],
+            None,
+            "Pairing failed",
+        ),
+    ],
+)
+async def test_check_registration_first_frame(
+    frames: list[dict[str, Any]], client_key: str | None, error: str | None
+) -> None:
+    """Test _check_registration handles the first frame by type."""
+    ws = AsyncMock()
+    ws.receive_json.side_effect = frames
+    client = WebOsClient(HOST)
+    # Skip the signed-manifest retry: that path is covered by the
+    # registration tests, this test is about the frame-type dispatch.
+    client.signed_manifest = False
+
+    if error is None:
+        await client._check_registration(ws)
+    else:
+        with pytest.raises(WebOsTvPairError, match=error):
+            await client._check_registration(ws)
+
+    assert client.client_key == client_key
+
+
+async def test_check_registration_registered_without_key_keeps_stored_key() -> None:
+    """Test a registered frame without a key keeps the stored key."""
+    ws = AsyncMock()
+    ws.receive_json.side_effect = [{"type": "registered", "payload": {}}]
+    client = WebOsClient(HOST)
+    client.client_key = "stored-key"
+    client.signed_manifest = False
+
+    await client._check_registration(ws)
+
+    assert client.client_key == "stored-key"
+
+
+async def test_check_registration_both_manifests_rejected() -> None:
+    """Test the second rejection raises the TV's own message."""
+    ws = AsyncMock()
+    ws.receive_json.side_effect = [
+        {"type": "error", "error": "403 Pairing rejected: signed manifest"},
+        {"type": "error", "error": "403 Pairing rejected: unsigned manifest"},
+    ]
+    client = WebOsClient(HOST)
+
+    with pytest.raises(WebOsTvPairError, match="unsigned manifest"):
+        await client._check_registration(ws)
+
+    assert client.signed_manifest
+    assert client.client_key is None
+
+
+@pytest.mark.parametrize("signed_manifest", [True, False])
+async def test_check_registration_error_with_stored_key(
+    signed_manifest: bool,  # noqa: FBT001
+) -> None:
+    """Test a registration error on a paired TV is transient, not a pair error."""
+    ws = AsyncMock()
+    ws.receive_json.side_effect = [
+        {"type": "error", "error": BOOT_ERROR},
+        {"type": "error", "error": BOOT_ERROR},
+    ]
+    client = WebOsClient(HOST, CLIENT_KEY)
+    client.signed_manifest = signed_manifest
+
+    with pytest.raises(WebOsTvRegistrationError, match=BOOT_ERROR):
+        await client._check_registration(ws)
+
+    assert client.signed_manifest == signed_manifest
+    assert client.client_key == CLIENT_KEY
+
+
+async def test_check_registration_prompt_error_with_stored_key() -> None:
+    """Test an error in the prompt step is a pair error, even with a stored key."""
+    ws = AsyncMock()
+    ws.receive_json.side_effect = [
+        {"type": "response", "payload": {"pairingType": "PROMPT"}},
+        {"type": "error", "error": "403 User denied access"},
+    ]
+    client = WebOsClient(HOST, "revoked-key")
+
+    with pytest.raises(WebOsTvPairError, match="User denied access"):
+        await client._check_registration(ws)
+
+    assert client.signed_manifest
 
 
 def registrations(fake_tv: FakeTv) -> list[dict[str, Any]]:
@@ -192,6 +308,44 @@ async def test_registration_unsigned_after_rejection(
 
     (manifest,) = registrations(fake_tv)
     assert "signatures" not in manifest
+
+
+async def test_registration_error_while_booting(
+    client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test a booting TV fails the connect as transient and the retry succeeds."""
+    fake_tv.booting = True
+
+    with pytest.raises(WebOsTvRegistrationError, match=BOOT_ERROR):
+        await client.connect()
+
+    await assert_disconnected(client)
+    assert isinstance(WebOsTvRegistrationError(), WebOsTvCommandError)
+    assert client.signed_manifest
+    assert client.client_key == CLIENT_KEY
+
+    fake_tv.booting = False
+    fake_tv.received.clear()
+    assert await client.connect()
+
+    (manifest,) = registrations(fake_tv)
+    assert "signatures" in manifest
+    assert client.signed_manifest
+
+
+async def test_registration_error_while_booting_without_key(
+    fake_tv: FakeTv,
+) -> None:
+    """Test a registration error without a stored key is a pair error."""
+    fake_tv.booting = True
+    client = WebOsClient(HOST)
+
+    with pytest.raises(WebOsTvPairError, match=BOOT_ERROR):
+        await client.connect()
+
+    await assert_disconnected(client)
+    assert client.signed_manifest
+    assert client.client_key is None
 
 
 async def test_invalid_hello_response(client: WebOsClient, fake_tv: FakeTv) -> None:
@@ -522,6 +676,34 @@ async def test_failing_callback_does_not_stop_state_updates(
     ("uri", "payload", "attribute", "expected"),
     [
         (ep.GET_VOLUME, {"volumeStatus": {"volume": 20}}, "volume", 20),
+        (ep.GET_VOLUME, {"volume": 21, "supportvolume": False}, "volume", 21),
+        (
+            ep.GET_VOLUME,
+            {
+                "volumeStatus": {
+                    "volume": 22,
+                    "soundOutput": "external_arc",
+                    "volumeSyncable": False,
+                }
+            },
+            "volume_status",
+            {"volume": 22, "soundOutput": "external_arc", "volumeSyncable": False},
+        ),
+        (
+            ep.GET_VOLUME,
+            {
+                "volume": 23,
+                "scenario": "mastervolume_tv_speaker",
+                "supportvolume": True,
+            },
+            "volume_status",
+            {
+                "volume": 23,
+                "scenario": "mastervolume_tv_speaker",
+                "supportvolume": True,
+                "returnValue": True,
+            },
+        ),
         (ep.GET_AUDIO_STATUS, {"mute": True}, "muted", True),
         (
             ep.GET_SOUND_OUTPUT,
@@ -560,6 +742,16 @@ async def test_subscription_updates(
         payload,
         lambda state: getattr(state, attribute) == expected,
     )
+
+
+async def test_subscribe_volume(connected_client: WebOsClient) -> None:
+    """Test subscribing to volume level changes and setting the volume state."""
+    callback = AsyncMock()
+    await connected_client.subscribe_volume(callback)
+    callback.assert_awaited_once_with(10)
+
+    await connected_client.set_volume_state(30)
+    assert connected_client.tv_state.volume == 30
 
 
 @pytest.mark.parametrize(
@@ -673,6 +865,70 @@ async def test_live_tv_channel_subscriptions(
         f"ssap://{ep.GET_CURRENT_CHANNEL}",
         f"ssap://{ep.GET_CHANNEL_INFO}",
     ]
+
+
+CHANNEL_ERROR = {
+    "returnValue": False,
+    "errorText": "broadcastId = 00000047 is already closed",
+}
+
+
+async def test_current_channel_failed_subscribe(
+    connected_client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test a failed current channel subscribe does not store the error."""
+    fake_tv.responses[ep.GET_CURRENT_CHANNEL] = CHANNEL_ERROR
+
+    # Wait for the failed subscription to be cleaned up before teardown
+    deleted = asyncio.Event()
+    delete_subscription_handler = connected_client.delete_subscription_handler
+
+    async def delete_and_signal(uri: str) -> None:
+        await delete_subscription_handler(uri)
+        if uri == ep.GET_CURRENT_CHANNEL:
+            deleted.set()
+
+    with (
+        patch("aiowebostv.webos_client.asyncio.sleep"),
+        patch.object(
+            connected_client, "delete_subscription_handler", delete_and_signal
+        ),
+    ):
+        await push_and_wait(
+            connected_client,
+            fake_tv,
+            ep.GET_CURRENT_APP_INFO,
+            {"appId": "com.webos.app.livetv"},
+            lambda state: (
+                state.current_app_id == "com.webos.app.livetv"
+                and state.current_channel is None
+            ),
+        )
+        await asyncio.wait_for(deleted.wait(), 1)
+
+    assert f"ssap://{ep.GET_CHANNEL_INFO}" not in fake_tv.received_uris()
+
+
+async def test_current_channel_error_update(
+    connected_client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test an error update on the current channel subscription clears it."""
+    with patch("aiowebostv.webos_client.asyncio.sleep"):
+        await push_and_wait(
+            connected_client,
+            fake_tv,
+            ep.GET_CURRENT_APP_INFO,
+            {"appId": "com.webos.app.livetv"},
+            lambda state: state.current_channel is not None,
+        )
+
+    await push_and_wait(
+        connected_client,
+        fake_tv,
+        ep.GET_CURRENT_CHANNEL,
+        CHANNEL_ERROR,
+        lambda state: state.current_channel is None,
+    )
 
 
 # Requests
@@ -1137,6 +1393,45 @@ async def test_subscribe_failure_cleans_up(
         await connected_client.subscribe(AsyncMock(), ep.GET_SERVICES)
 
     assert ep.GET_SERVICES not in connected_client._subscriptions
+
+
+async def test_delete_subscription_handler_propagates_cancel(
+    client: WebOsClient,
+) -> None:
+    """Test deleting a subscription handler does not swallow our cancellation.
+
+    A failed subscribe deletes its handler from inside another callback task,
+    which disconnect() may cancel. Swallowing that cancel leaves the callback
+    task running and disconnect() waits for it forever.
+    """
+    in_callback = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_callback(_payload: dict[str, Any]) -> None:
+        in_callback.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            # Keep the handler busy after its cancel, so deleting it waits
+            await release.wait()
+            raise
+
+    await client.create_subscription_handler(ep.GET_SERVICES, 1, slow_callback)
+    client.callback_queues[1].put_nowait({"payload": {}})
+    await in_callback.wait()
+
+    delete_task = asyncio.create_task(
+        client.delete_subscription_handler(ep.GET_SERVICES)
+    )
+    await asyncio.sleep(0)
+    delete_task.cancel()
+    await asyncio.sleep(0)
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await delete_task
+    assert ep.GET_SERVICES not in client._subscriptions
+    assert 1 not in client.callback_queues
 
 
 @pytest.mark.parametrize(

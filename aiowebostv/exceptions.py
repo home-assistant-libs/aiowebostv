@@ -13,6 +13,10 @@ class WebOsTvCommandError(WebOsTvError):
     """Represent TV command errors."""
 
 
+class WebOsTvRegistrationError(WebOsTvCommandError):
+    """Represent a transient registration error on an already paired TV."""
+
+
 class WebOsTvCommandTimeoutError(WebOsTvCommandError):
     """Represent TV command timeout error."""
 

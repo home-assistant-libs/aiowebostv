@@ -21,6 +21,7 @@ from .exceptions import (
     WebOsTvCommandError,
     WebOsTvCommandTimeoutError,
     WebOsTvPairError,
+    WebOsTvRegistrationError,
     WebOsTvResponseTypeError,
     WebOsTvServiceNotFoundError,
 )
@@ -257,28 +258,41 @@ class WebOsClient:
         if response["type"] == "error" and self.signed_manifest:
             # Newer firmware rejects the signed manifest, retry unsigned
             _LOGGER.debug(
-                "register(%s): %s, retrying unsigned", self.host, response["error"]
+                "register(%s): %s, retrying unsigned",
+                self.host,
+                response.get("error"),
             )
             self.signed_manifest = False
             response = await self._send_registration(ws)
+            if response["type"] == "error":
+                # Unsigned did not help, start signed again on the next connect
+                self.signed_manifest = True
+
+        if response["type"] == "error" and self.client_key:
+            # An already paired TV rejects registration while it is booting,
+            # this is transient and the next connect attempt succeeds.
+            raise WebOsTvRegistrationError(response.get("error", "Registration failed"))
 
         if (
             response["type"] == "response"
-            and response["payload"]["pairingType"] == "PROMPT"
+            and response.get("payload", {}).get("pairingType") == "PROMPT"
         ):
             response = await ws.receive_json(timeout=RECEIVE_TIMEOUT)
             _LOGGER.debug("recv(%s): pairing", self.host)
-            _LOGGER.debug(
-                "pairing(%s): type: %s, error: %s",
-                self.host,
-                response["type"],
-                response.get("error"),
+        _LOGGER.debug(
+            "pairing(%s): type: %s, error: %s",
+            self.host,
+            response["type"],
+            response.get("error"),
+        )
+        if response["type"] == "error":
+            raise WebOsTvPairError(response.get("error", "Pairing failed"))
+        if response["type"] == "registered":
+            # Keep the stored key if the TV sends no new one, so a
+            # reconnect that works today keeps working.
+            self.client_key = (
+                response.get("payload", {}).get("client-key") or self.client_key
             )
-            if response["type"] == "error":
-                raise WebOsTvPairError(response["error"])
-            if response["type"] == "registered":
-                self.client_key = response["payload"]["client-key"]
-
         if not self.client_key:
             error = "Client key not set, pairing failed."
             raise WebOsTvPairError(error)
@@ -318,7 +332,7 @@ class WebOsClient:
             self.subscribe_power_state(self.set_power_state),
             self.subscribe_current_app(self.set_current_app_state),
             self.subscribe_muted(self.set_muted_state),
-            self.subscribe_volume(self.set_volume_state),
+            self.subscribe_volume_status(self.set_volume_status_state),
             self.subscribe_apps(self.set_apps_state),
             self.subscribe_inputs(self.set_inputs_state),
             self.subscribe_sound_output(self.set_sound_output_state),
@@ -476,7 +490,14 @@ class WebOsClient:
     async def register_state_update_callback(
         self, callback: Callable[[WebOsTvState], Any]
     ) -> None:
-        """Register user state update callback."""
+        """Register user state update callback.
+
+        Do not await `disconnect()` from inside a callback. Connection
+        teardown waits for running callbacks to finish, while `disconnect()`
+        waits for the teardown, so the two would deadlock. To disconnect in
+        response to a state change, schedule it as a separate task instead,
+        e.g. `asyncio.create_task(client.disconnect())`.
+        """
         self.state_update_callbacks.append(callback)
         if self.do_state_update:
             await callback(self.tv_state)
@@ -618,6 +639,12 @@ class WebOsClient:
         self.tv_state.volume = volume
         await self.do_state_update_callbacks()
 
+    async def set_volume_status_state(self, volume_status: dict[str, Any]) -> None:
+        """Set TV volume status callback."""
+        self.tv_state.volume_status = volume_status
+        self.tv_state.volume = volume_status.get("volume")
+        await self.do_state_update_callbacks()
+
     async def set_channels_state(self, channels: list[dict[str, Any]]) -> None:
         """Set TV channels callback."""
         self.tv_state.channels = channels
@@ -629,7 +656,17 @@ class WebOsClient:
         This function also handles the channel info subscription,
         since that call may fail if channel information is not
         available when it's called.
+
+        The TV may send an error payload on this subscription, for example
+        a failed subscribe or "broadcastId ... is already closed" when the
+        broadcast ends. Clear the channel instead of storing the error.
         """
+        if channel.get("returnValue") is False:
+            _LOGGER.debug("current channel(%s): error payload %s", self.host, channel)
+            self.tv_state.current_channel = None
+            await self.do_state_update_callbacks()
+            return
+
         self.tv_state.current_channel = channel
 
         if self.tv_state.channel_info is None:
@@ -787,11 +824,18 @@ class WebOsClient:
         task = self.callback_tasks.pop(uid)
         if not task.done():
             task.cancel()
+        # Wait for the task to finish without swallowing our own cancellation,
+        # the caller may run in a callback task that disconnect() cancels.
+        cancelled = False
         while not task.done():
-            with suppress(asyncio.CancelledError):
-                await task
+            try:
+                await asyncio.wait({task})
+            except asyncio.CancelledError:
+                cancelled = True
         del self.callback_queues[uid]
         del self._subscriptions[uri]
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def subscribe(
         self, callback: Callable, uri: str, payload: dict[str, Any] | None = None
@@ -1087,6 +1131,18 @@ class WebOsClient:
             await callback(payload.get("volumeStatus", payload).get("volume"))
 
         return await self.subscribe(volume, ep.GET_VOLUME)
+
+    async def subscribe_volume_status(self, callback: Callable) -> dict[str, Any]:
+        """Subscribe to changes in the volume status.
+
+        Newer webOS versions nest the status under "volumeStatus",
+        older versions return it at the top level of the payload.
+        """
+
+        async def volume_status(payload: dict[str, Any]) -> None:
+            await callback(payload.get("volumeStatus", payload))
+
+        return await self.subscribe(volume_status, ep.GET_VOLUME)
 
     async def set_volume(self, volume: int) -> dict[str, Any]:
         """Set volume."""
