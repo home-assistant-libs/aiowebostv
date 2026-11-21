@@ -21,6 +21,7 @@ from .exceptions import (
     WebOsTvCommandError,
     WebOsTvCommandTimeoutError,
     WebOsTvPairError,
+    WebOsTvRegistrationError,
     WebOsTvResponseTypeError,
     WebOsTvServiceNotFoundError,
 )
@@ -260,6 +261,14 @@ class WebOsClient:
             )
             self.signed_manifest = False
             response = await self._send_registration(ws)
+            if response["type"] == "error":
+                # Unsigned did not help, start signed again on the next connect
+                self.signed_manifest = True
+
+        if response["type"] == "error" and self.client_key:
+            # An already paired TV rejects registration while it is booting,
+            # this is transient and the next connect attempt succeeds.
+            raise WebOsTvRegistrationError(response.get("error", "Registration failed"))
 
         if (
             response["type"] == "response"

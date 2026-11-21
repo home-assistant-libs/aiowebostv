@@ -16,6 +16,7 @@ from aiowebostv import (
     WebOsClient,
     WebOsTvCommandError,
     WebOsTvPairError,
+    WebOsTvRegistrationError,
     WebOsTvServiceNotFoundError,
     WebOsTvState,
     webos_client,
@@ -26,7 +27,7 @@ from aiowebostv.exceptions import (
     WebOsTvResponseTypeError,
 )
 
-from .conftest import CLIENT_KEY, HOST, NEW_CLIENT_KEY, NOT_FOUND, FakeTv
+from .conftest import BOOT_ERROR, CLIENT_KEY, HOST, NEW_CLIENT_KEY, NOT_FOUND, FakeTv
 
 pytestmark = pytest.mark.asyncio
 
@@ -212,8 +213,43 @@ async def test_check_registration_both_manifests_rejected() -> None:
     with pytest.raises(WebOsTvPairError, match="unsigned manifest"):
         await client._check_registration(ws)
 
-    assert not client.signed_manifest
+    assert client.signed_manifest
     assert client.client_key is None
+
+
+@pytest.mark.parametrize("signed_manifest", [True, False])
+async def test_check_registration_error_with_stored_key(
+    signed_manifest: bool,  # noqa: FBT001
+) -> None:
+    """Test a registration error on a paired TV is transient, not a pair error."""
+    ws = AsyncMock()
+    ws.receive_json.side_effect = [
+        {"type": "error", "error": BOOT_ERROR},
+        {"type": "error", "error": BOOT_ERROR},
+    ]
+    client = WebOsClient(HOST, CLIENT_KEY)
+    client.signed_manifest = signed_manifest
+
+    with pytest.raises(WebOsTvRegistrationError, match=BOOT_ERROR):
+        await client._check_registration(ws)
+
+    assert client.signed_manifest == signed_manifest
+    assert client.client_key == CLIENT_KEY
+
+
+async def test_check_registration_prompt_error_with_stored_key() -> None:
+    """Test an error in the prompt step is a pair error, even with a stored key."""
+    ws = AsyncMock()
+    ws.receive_json.side_effect = [
+        {"type": "response", "payload": {"pairingType": "PROMPT"}},
+        {"type": "error", "error": "403 User denied access"},
+    ]
+    client = WebOsClient(HOST, "revoked-key")
+
+    with pytest.raises(WebOsTvPairError, match="User denied access"):
+        await client._check_registration(ws)
+
+    assert client.signed_manifest
 
 
 def registrations(fake_tv: FakeTv) -> list[dict[str, Any]]:
@@ -266,6 +302,44 @@ async def test_registration_unsigned_after_rejection(
 
     (manifest,) = registrations(fake_tv)
     assert "signatures" not in manifest
+
+
+async def test_registration_error_while_booting(
+    client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test a booting TV fails the connect as transient and the retry succeeds."""
+    fake_tv.booting = True
+
+    with pytest.raises(WebOsTvRegistrationError, match=BOOT_ERROR):
+        await client.connect()
+
+    await assert_disconnected(client)
+    assert isinstance(WebOsTvRegistrationError(), WebOsTvCommandError)
+    assert client.signed_manifest
+    assert client.client_key == CLIENT_KEY
+
+    fake_tv.booting = False
+    fake_tv.received.clear()
+    assert await client.connect()
+
+    (manifest,) = registrations(fake_tv)
+    assert "signatures" in manifest
+    assert client.signed_manifest
+
+
+async def test_registration_error_while_booting_without_key(
+    fake_tv: FakeTv,
+) -> None:
+    """Test a registration error without a stored key is a pair error."""
+    fake_tv.booting = True
+    client = WebOsClient(HOST)
+
+    with pytest.raises(WebOsTvPairError, match=BOOT_ERROR):
+        await client.connect()
+
+    await assert_disconnected(client)
+    assert client.signed_manifest
+    assert client.client_key is None
 
 
 async def test_invalid_hello_response(client: WebOsClient, fake_tv: FakeTv) -> None:
