@@ -29,7 +29,7 @@ dependencies = [
 lint = [
   "prek==0.5.11",
   "pydocstyle==6.3.0",
-  "ruff==0.17.5",
+  "ruff==0.17.6",
   "ty==0.0.107",
 ]
 dev = [
