@@ -37,7 +37,7 @@ dev = [
   "pytest-cov==7.1.0",
   "pytest==9.2.0",
   "tox==4.67.13",
-  "tox-gh-actions==3.5.0",
+  "tox-gh-actions==3.5.1",
 ]
 
 [project.urls]
