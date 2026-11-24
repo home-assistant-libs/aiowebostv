@@ -17,6 +17,7 @@ CLIENT_KEY = "valid-client-key"
 NEW_CLIENT_KEY = "new-client-key"
 
 NOT_FOUND = "404 no such service or method"
+APPLICATION_ERROR = "500 Application error"
 
 BOOT_ERROR = "400 prevent registering your device with TV"
 
@@ -28,6 +29,8 @@ def default_responses() -> dict[str, dict[str, Any] | None]:
         ep.GET_SOFTWARE_INFO: {"product_name": "webOSTV 6.0", "returnValue": True},
         ep.GET_CONNECTION_INFO: {"wifiInfo": {}, "returnValue": True},
         ep.GET_POWER_STATE: {"state": "Active", "returnValue": True},
+        # answers the screen state support probe on connect
+        ep.TURN_ON_SCREEN: {"returnValue": True},
         ep.GET_CURRENT_APP_INFO: {"appId": "com.webos.app.hdmi1", "returnValue": True},
         ep.GET_AUDIO_STATUS: {"mute": False, "returnValue": True},
         ep.GET_VOLUME: {"volumeStatus": {"volume": 10}, "returnValue": True},
@@ -67,7 +70,9 @@ class FakeTv:
         self.reject_signed = False
         # Reject every registration, like a TV that is still booting
         self.booting = False
-        # uri -> payload; None responds with a 404 error, missing uri never responds
+        # uri -> payload; None responds with a 404 error, a payload
+        # with an errorCode with an application error, missing uri
+        # never responds
         self.responses = default_responses()
         self.received: list[dict[str, Any]] = []
         self.input_received: asyncio.Queue[str] = asyncio.Queue()
@@ -223,6 +228,17 @@ class FakeTv:
         if (payload := self.responses[uri]) is None:
             await ws.send_json(
                 {"type": "error", "id": msg_id, "error": NOT_FOUND, "payload": {}}
+            )
+            return
+
+        if "errorCode" in payload:
+            await ws.send_json(
+                {
+                    "type": "error",
+                    "id": msg_id,
+                    "error": APPLICATION_ERROR,
+                    "payload": payload,
+                }
             )
             return
 
