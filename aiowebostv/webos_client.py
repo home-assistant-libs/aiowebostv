@@ -1048,32 +1048,25 @@ class WebOsClient:
         broadcast_address: str = WOL_BROADCAST_ADDRESS,
         port: int = WOL_PORT,
     ) -> None:
-        """Turn on the TV over the connection or with Wake-on-LAN.
+        """Turn on the TV with Wake-on-LAN.
 
-        If connected, the TV is turned on with a request. Otherwise magic
-        packets are sent to mac_addresses, or to the MAC addresses the TV
-        reported on connect (self.mac_addresses).
+        Magic packets are sent to mac_addresses, or to the MAC addresses the
+        TV reported on connect (self.mac_addresses). Does nothing if the TV
+        is connected and on.
+
+        Without a MAC address, a TV that is connected in standby is turned
+        on with a request instead. Newer TVs do not support that request.
 
         Wake-on-LAN gets no reply, returning does not mean the TV woke up.
         The TV must support it (webOS 3.0 and newer) and have it enabled
         ("Mobile TV On" / "Turn on via Wi-Fi").
 
-        Raises WebOsTvWakeError if no MAC address is known or the packets
-        could not be sent, and ValueError for an invalid MAC address.
+        Raises WebOsTvWakeError if no MAC address is known (and the request
+        failed) or the packets could not be sent, and ValueError for an
+        invalid MAC address.
         """
-        if self.is_connected():
-            if self.tv_state.is_on:
-                return
-            try:
-                await self.power_on()
-            except WebOsTvCommandError as err:
-                _LOGGER.debug(
-                    "turn_on(%s): request failed: %r, using Wake-on-LAN",
-                    self.host,
-                    err,
-                )
-            else:
-                return
+        if self.is_connected() and self.tv_state.is_on:
+            return
 
         macs: list[str] = []
         for mac in mac_addresses or self._mac_addresses.values():
@@ -1082,11 +1075,32 @@ class WebOsClient:
                 raise ValueError(error)
             if normalized not in macs:
                 macs.append(normalized)
-        if not macs:
-            error = "No MAC address known, can't turn on the TV with Wake-on-LAN"
-            raise WebOsTvWakeError(error)
 
-        await self._send_magic_packets(macs, broadcast_address, port)
+        if macs:
+            await self._send_magic_packets(macs, broadcast_address, port)
+            return
+
+        if self.is_connected() and await self._turn_on_request():
+            return
+
+        error = "No MAC address known, can't turn on the TV with Wake-on-LAN"
+        raise WebOsTvWakeError(error)
+
+    async def _turn_on_request(self) -> bool:
+        """Turn on a connected TV with a request, return True on success."""
+        try:
+            await self.power_on()
+        except WebOsTvCommandError as err:
+            _LOGGER.debug("turn_on(%s): request failed: %r", self.host, err)
+        except asyncio.CancelledError:
+            # A TV going to suspend closes the connection, which cancels
+            # the pending request. Re-raise if we are cancelled ourselves.
+            if (task := asyncio.current_task()) and task.cancelling():
+                raise
+            _LOGGER.debug("turn_on(%s): connection closed during request", self.host)
+        else:
+            return True
+        return False
 
     async def _send_magic_packets(
         self, macs: list[str], broadcast_address: str, port: int

@@ -126,9 +126,10 @@ if __name__ == "__main__":
 
 ### Turning on the TV
 
-`turn_on()` turns the TV on over the connection when it is connected (for
-example in standby). Otherwise it sends Wake-on-LAN magic packets to the
-TV's wired and Wi-Fi MAC addresses.
+`turn_on()` sends Wake-on-LAN magic packets to the TV's wired and Wi-Fi MAC
+addresses, also when the TV is still connected in standby. It does nothing if
+the TV is connected and on. Without a known MAC address, a TV connected in
+standby is turned on with a request instead, which newer TVs don't support.
 
 ```python
 # MAC addresses reported by the TV on connect, store them for later use
@@ -140,7 +141,8 @@ await client.turn_on(macs.values())
 
 Without `mac_addresses`, `client.mac_addresses` is used. It keeps the MAC
 addresses the TV reported on connect, also after the TV disconnects.
-`WebOsTvWakeError` is raised when no MAC address is known.
+`WebOsTvWakeError` is raised when no MAC address is known and the TV could
+not be turned on with a request.
 
 Wake-on-LAN requirements and limitations:
 
