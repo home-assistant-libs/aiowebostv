@@ -27,3 +27,7 @@ class WebOsTvResponseTypeError(WebOsTvCommandError):
 
 class WebOsTvServiceNotFoundError(WebOsTvResponseTypeError):
     """Represent TV service not found error."""
+
+
+class WebOsTvWakeError(WebOsTvCommandError):
+    """Represent an error waking the TV with Wake-on-LAN."""

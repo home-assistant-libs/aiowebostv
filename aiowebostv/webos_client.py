@@ -5,9 +5,10 @@ import base64
 import copy
 import json
 import logging
+import socket
 from asyncio import Future, Task
 from asyncio.queues import Queue
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import suppress
 from datetime import timedelta
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 from aiohttp import ClientSession, ClientWebSocketResponse, WSMsgType
+from wakeonlan import create_magic_packet
 
 from . import endpoints as ep
 from .exceptions import (
@@ -24,6 +26,7 @@ from .exceptions import (
     WebOsTvRegistrationError,
     WebOsTvResponseTypeError,
     WebOsTvServiceNotFoundError,
+    WebOsTvWakeError,
 )
 from .handshake import REGISTRATION_MESSAGE
 from .models import WebOsTvInfo, WebOsTvState
@@ -42,7 +45,42 @@ INPUT_WS_MAX_MSG_SIZE = 8 * 1024  # 8KB, not expecting any messages
 WS_PORT = 3000
 WSS_PORT = 3001
 
+WOL_BROADCAST_ADDRESS = "255.255.255.255"
+WOL_PORT = 9
+# Send a few spaced rounds of magic packets, a TV in deep standby or a
+# dozing Wi-Fi access point can miss a single packet
+WOL_PACKET_COUNT = 3
+WOL_PACKET_INTERVAL = 0.1  # seconds between rounds
+# Network interfaces that can wake the TV, p2pInfo (Wi-Fi Direct) can not
+WOL_INTERFACES = {"wired": "wiredInfo", "wifi": "wifiInfo"}
+
 _LOGGER = logging.getLogger(__package__)
+
+
+def normalize_mac(mac: str) -> str | None:
+    """Return the MAC address as lowercase colon separated, None if invalid."""
+    if "/" in mac:
+        # create_magic_packet accepts a SecureOn password after a slash
+        return None
+    try:
+        packet = create_magic_packet(mac)
+    except ValueError:
+        return None
+    # The packet starts with 6 bytes of 0xFF followed by the MAC address
+    return packet[6:12].hex(":")
+
+
+def parse_mac_addresses(connection: dict[str, Any]) -> dict[str, str]:
+    """Return the valid wired and Wi-Fi MAC addresses from the connection info."""
+    macs = {}
+    for name, interface in WOL_INTERFACES.items():
+        info = connection.get(interface)
+        if not isinstance(info, dict):
+            continue
+        mac = info.get("macAddress")
+        if isinstance(mac, str) and (normalized := normalize_mac(mac)):
+            macs[name] = normalized
+    return macs
 
 
 class WebOsClient:
@@ -82,6 +120,8 @@ class WebOsClient:
         self._rx_tasks: set[Task] = set()
         self._subscriptions: dict[str, int] = {}
         self._prefer_wss = True
+        # Survives tv_info.clear() on reconnect, used to wake the TV when it is off
+        self._mac_addresses: dict[str, str] = {}
 
     async def connect(self) -> bool:
         """Connect to webOS TV device."""
@@ -113,6 +153,16 @@ class WebOsClient:
             return
 
         _LOGGER.debug("disconnect(%s): already disconnected", self.host)
+
+    @property
+    def mac_addresses(self) -> dict[str, str]:
+        """Return the wired and Wi-Fi MAC addresses of the TV.
+
+        Reported by the TV on connect and kept when the TV disconnects or
+        reconnecting fails. Empty if the TV never reported them, like
+        webOS 2.0 and older.
+        """
+        return dict(self._mac_addresses)
 
     def is_registered(self) -> bool:
         """Paired with the tv."""
@@ -324,6 +374,8 @@ class WebOsClient:
 
         with suppress(WebOsTvServiceNotFoundError):
             self.tv_info.connection = await self.get_connection_info()
+        if mac_addresses := parse_mac_addresses(self.tv_info.connection):
+            self._mac_addresses = mac_addresses
 
         subscribe_state_updates = {
             self.subscribe_power_state(self.set_power_state),
@@ -989,6 +1041,72 @@ class WebOsClient:
     async def power_on(self) -> dict[str, Any]:
         """Power on TV."""
         return await self.request(ep.POWER_ON)
+
+    async def turn_on(
+        self,
+        mac_addresses: Iterable[str] | None = None,
+        broadcast_address: str = WOL_BROADCAST_ADDRESS,
+        port: int = WOL_PORT,
+    ) -> None:
+        """Turn on the TV with Wake-on-LAN.
+
+        Magic packets are sent to mac_addresses, or to the MAC addresses the
+        TV reported on connect (self.mac_addresses), also when the TV is
+        still connected in standby. Does nothing if the TV is connected and on.
+
+        Wake-on-LAN gets no reply, returning does not mean the TV woke up.
+        The TV must support it (webOS 3.0 and newer) and have it enabled
+        ("Mobile TV On" / "Turn on via Wi-Fi").
+
+        Raises WebOsTvWakeError if no MAC address is known or the packets
+        could not be sent, and ValueError for an invalid MAC address.
+        """
+        if self.is_connected() and self.tv_state.is_on:
+            return
+
+        macs: list[str] = []
+        for mac in mac_addresses or self._mac_addresses.values():
+            if (normalized := normalize_mac(mac)) is None:
+                error = f"Invalid MAC address: {mac}"
+                raise ValueError(error)
+            if normalized not in macs:
+                macs.append(normalized)
+        if not macs:
+            error = "No MAC address known, can't turn on the TV with Wake-on-LAN"
+            raise WebOsTvWakeError(error)
+
+        await self._send_magic_packets(macs, broadcast_address, port)
+
+    async def _send_magic_packets(
+        self, macs: list[str], broadcast_address: str, port: int
+    ) -> None:
+        """Send rounds of magic packets to the MAC addresses."""
+        packets = [create_magic_packet(mac) for mac in macs]
+        _LOGGER.debug(
+            "turn_on(%s): Wake-on-LAN to %s via %s:%s",
+            self.host,
+            macs,
+            broadcast_address,
+            port,
+        )
+        try:
+            transport, _ = await self._loop.create_datagram_endpoint(
+                asyncio.DatagramProtocol,
+                family=socket.AF_INET,
+                allow_broadcast=True,
+            )
+        except OSError as err:
+            error = f"Failed to send Wake-on-LAN packets: {err}"
+            raise WebOsTvWakeError(error) from err
+
+        try:
+            for packet_round in range(WOL_PACKET_COUNT):
+                if packet_round:
+                    await asyncio.sleep(WOL_PACKET_INTERVAL)
+                for packet in packets:
+                    transport.sendto(packet, (broadcast_address, port))
+        finally:
+            transport.close()
 
     # 3D Mode
     async def turn_3d_on(self) -> dict[str, Any]:

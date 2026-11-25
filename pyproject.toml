@@ -23,6 +23,7 @@ classifiers = [
 ]
 dependencies = [
   "aiohttp>=3.11",
+  "wakeonlan>=3.1",
 ]
 
 [dependency-groups]

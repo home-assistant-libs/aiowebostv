@@ -172,6 +172,7 @@ version = "0.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "wakeonlan" },
 ]
 
 [package.dev-dependencies]
@@ -190,7 +191,10 @@ lint = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "aiohttp", specifier = ">=3.11" }]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.11" },
+    { name = "wakeonlan", specifier = ">=3.1" },
+]
 
 [package.metadata.requires-dev]
 dev = [
@@ -976,6 +980,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b2/24/20282bc8e69ff8dee680dc2b95e9dc81fa7e7894b14c1a8d06330e97fef7/virtualenv-21.15.1.tar.gz", hash = "sha256:e79c90b8f601701599c25905e02839924fede2c798d52325670d24fbdaab74ee", size = 5517048, upload-time = "2026-10-28T01:12:50.919Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ce/23/cdab19d3a9da42ca0938081e163e25f81e610141800ead743ba1ee881f0e/virtualenv-21.15.1-py3-none-any.whl", hash = "sha256:0d14a991689c67600316880eadc0a37b7690cb632e3b4ac67e2bc05b2b2e24a4", size = 5558848, upload-time = "2026-10-28T01:12:48.605Z" },
+]
+
+[[package]]
+name = "wakeonlan"
+version = "4.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8f/16/69e4cdcce1be240667dfa2607f12e00d1c79e4606656327c4f1fb88fea40/wakeonlan-4.0.0.tar.gz", hash = "sha256:1cb30c4ae60f85ef289f4f7d4f703382ed19ba84103206dc5e2b1e51bec9f456", size = 5079, upload-time = "2026-06-28T09:23:15.711Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/80/ecebf7b1b32ebe4a10d72a09e21c4c76a2460fac159752ec9ab88508b7d0/wakeonlan-4.0.0-py3-none-any.whl", hash = "sha256:82c50fe0c8dbc4848b8398f48fd2d2ed5d4af363f3006279372d76513ef84505", size = 5882, upload-time = "2026-06-28T09:23:14.577Z" },
 ]
 
 [[package]]

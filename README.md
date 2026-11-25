@@ -124,4 +124,33 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+### Turning on the TV
+
+`turn_on()` sends Wake-on-LAN magic packets to the TV's wired and Wi-Fi MAC
+addresses, also when the TV is still connected in standby. It does nothing if
+the TV is connected and on.
+
+```python
+# MAC addresses reported by the TV on connect, store them for later use
+macs = client.mac_addresses  # {"wired": "...", "wifi": "..."}
+
+# Later, while the TV is off
+await client.turn_on(macs.values())
+```
+
+Without `mac_addresses`, `client.mac_addresses` is used. It keeps the MAC
+addresses the TV reported on connect, also after the TV disconnects.
+`WebOsTvWakeError` is raised when no MAC address is known.
+
+Wake-on-LAN requirements and limitations:
+
+- webOS 3.0 (2016) and newer, older TVs (webOS 1.x/2.0) do not support it
+  and do not report their MAC addresses.
+- It must be enabled on the TV: "Mobile TV On" / "Turn on via Wi-Fi", on some
+  older models also "LG Connect Apps". The menu location varies by model year.
+- A wired connection is more reliable, some TVs stop responding to Wake-on-LAN
+  over Wi-Fi after some time in standby.
+- Magic packets get no reply, `turn_on()` returning does not mean the TV
+  turned on.
+
 Examples can be found in the `examples` folder
