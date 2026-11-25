@@ -3,14 +3,16 @@
 import asyncio
 import base64
 import gc
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
+import pytest_asyncio
 from aiohttp.test_utils import unused_port
+from wakeonlan import create_magic_packet
 
 from aiowebostv import (
     WebOsClient,
@@ -19,6 +21,7 @@ from aiowebostv import (
     WebOsTvRegistrationError,
     WebOsTvServiceNotFoundError,
     WebOsTvState,
+    WebOsTvWakeError,
     webos_client,
 )
 from aiowebostv import endpoints as ep
@@ -27,7 +30,16 @@ from aiowebostv.exceptions import (
     WebOsTvResponseTypeError,
 )
 
-from .conftest import BOOT_ERROR, CLIENT_KEY, HOST, NEW_CLIENT_KEY, NOT_FOUND, FakeTv
+from .conftest import (
+    BOOT_ERROR,
+    CLIENT_KEY,
+    HOST,
+    NEW_CLIENT_KEY,
+    NOT_FOUND,
+    WIFI_MAC,
+    WIRED_MAC,
+    FakeTv,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -79,7 +91,10 @@ async def test_connect(connected_client: WebOsClient, fake_tv: FakeTv) -> None:
     assert client.tv_info.hello == {"x": 1}
     assert client.tv_info.system["modelName"] == "OLED55C1"
     assert client.tv_info.software["product_name"] == "webOSTV 6.0"
-    assert "wifiInfo" in client.tv_info.connection
+    assert client.mac_addresses == {
+        "wired": WIRED_MAC.lower(),
+        "wifi": WIFI_MAC.lower(),
+    }
 
     state = client.tv_state
     assert state.is_on
@@ -287,6 +302,27 @@ async def test_registration_signed_manifest_rejected(
     assert len(unsigned["permissions"]) == 37
     assert unsigned["permissions"] == sorted(unsigned["permissions"])
     assert "READ_UPDATE_INFO" in unsigned["permissions"]
+
+
+async def test_registration_unsigned_mac_addresses(
+    client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test the MAC addresses are available with the unsigned manifest.
+
+    Real TVs reject software info without the signed READ_UPDATE_INFO
+    permission, but still report the connection info.
+    """
+    fake_tv.reject_signed = True
+    fake_tv.responses[ep.GET_SOFTWARE_INFO] = None
+
+    assert await client.connect()
+
+    assert not client.signed_manifest
+    assert client.tv_info.software == {}
+    assert client.mac_addresses == {
+        "wired": WIRED_MAC.lower(),
+        "wifi": WIFI_MAC.lower(),
+    }
 
 
 async def test_registration_unsigned_after_rejection(
@@ -1116,6 +1152,292 @@ async def test_power_off(
     await connected_client.get_power_state()
 
     assert (f"ssap://{ep.POWER_OFF}" in fake_tv.received_uris()) is sent
+
+
+@pytest.mark.parametrize(
+    ("mac", "expected"),
+    [
+        ("AA:BB:CC:00:00:01", "aa:bb:cc:00:00:01"),
+        ("aa-bb-cc-00-00-01", "aa:bb:cc:00:00:01"),
+        ("AABB.CC00.0001", "aa:bb:cc:00:00:01"),
+        ("AABBCC000001", "aa:bb:cc:00:00:01"),
+        ("", None),
+        ("not-a-mac", None),
+        ("GG:BB:CC:00:00:01", None),
+        ("AA:BB:CC:00:00:01/AA:BB:CC:00:00:02", None),
+    ],
+)
+async def test_normalize_mac(mac: str, expected: str | None) -> None:
+    """Test normalizing MAC addresses."""
+    assert webos_client.normalize_mac(mac) == expected
+
+
+@pytest.mark.parametrize(
+    ("connection", "expected"),
+    [
+        (
+            {
+                "wiredInfo": {"macAddress": "AA:BB:CC:00:00:01"},
+                "wifiInfo": {"macAddress": "AA:BB:CC:00:00:02"},
+                "p2pInfo": {"macAddress": "AA:BB:CC:00:00:03"},
+            },
+            {"wired": "aa:bb:cc:00:00:01", "wifi": "aa:bb:cc:00:00:02"},
+        ),
+        (
+            {"wifiInfo": {"macAddress": "AA:BB:CC:00:00:02"}},
+            {"wifi": "aa:bb:cc:00:00:02"},
+        ),
+        # p2pInfo is the Wi-Fi Direct MAC address and can't wake the TV
+        ({"p2pInfo": {"macAddress": "AA:BB:CC:00:00:03"}}, {}),
+        # webOS 2.0 has no connection info service
+        ({}, {}),
+        ({"wiredInfo": {}, "wifiInfo": {"macAddress": ""}}, {}),
+        ({"wiredInfo": {"macAddress": "invalid"}, "wifiInfo": None}, {}),
+        ({"wiredInfo": {"macAddress": None}, "wifiInfo": "invalid"}, {}),
+    ],
+)
+async def test_parse_mac_addresses(
+    connection: dict[str, Any], expected: dict[str, str]
+) -> None:
+    """Test MAC addresses are read from the connection info."""
+    assert webos_client.parse_mac_addresses(connection) == expected
+
+
+async def test_mac_addresses_copy(connected_client: WebOsClient) -> None:
+    """Test changing the returned MAC addresses does not change the client."""
+    connected_client.mac_addresses.clear()
+
+    assert connected_client.mac_addresses
+
+
+class WolReceiver(asyncio.DatagramProtocol):
+    """Receive Wake-on-LAN packets."""
+
+    def __init__(self) -> None:
+        """Initialize the receiver."""
+        self.port = 0
+        self.packets: asyncio.Queue[bytes] = asyncio.Queue()
+
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:  # noqa: ARG002
+        """Store a received packet."""
+        self.packets.put_nowait(data)
+
+    async def received(self, count: int) -> list[bytes]:
+        """Return the received packets, asserting the exact count."""
+        async with asyncio.timeout(1):
+            packets = [await self.packets.get() for _ in range(count)]
+        await asyncio.sleep(0.05)
+        assert self.packets.empty()
+        return packets
+
+
+@pytest_asyncio.fixture
+async def wol(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[WolReceiver]:
+    """Receive Wake-on-LAN packets sent to HOST without delay between rounds."""
+    monkeypatch.setattr(webos_client, "WOL_PACKET_INTERVAL", 0)
+    transport, receiver = await asyncio.get_running_loop().create_datagram_endpoint(
+        WolReceiver, local_addr=(HOST, 0)
+    )
+    receiver.port = transport.get_extra_info("sockname")[1]
+    yield receiver
+    transport.close()
+
+
+def packets_for(*macs: str) -> list[bytes]:
+    """Return the expected magic packets for all rounds."""
+    return [create_magic_packet(mac) for mac in macs] * webos_client.WOL_PACKET_COUNT
+
+
+async def test_turn_on_when_on(
+    connected_client: WebOsClient, fake_tv: FakeTv, wol: WolReceiver
+) -> None:
+    """Test turning on a TV that is already on does nothing."""
+    await connected_client.turn_on(broadcast_address=HOST, port=wol.port)
+
+    assert f"ssap://{ep.POWER_ON}" not in fake_tv.received_uris()
+    assert await wol.received(0) == []
+
+
+async def test_turn_on_standby(
+    connected_client: WebOsClient, fake_tv: FakeTv, wol: WolReceiver
+) -> None:
+    """Test turning on a connected TV in standby uses the connection."""
+    await push_and_wait(
+        connected_client,
+        fake_tv,
+        ep.GET_POWER_STATE,
+        {"state": "Active Standby"},
+        lambda state: not state.is_on,
+    )
+    fake_tv.responses[ep.POWER_ON] = {"returnValue": True}
+
+    await connected_client.turn_on(broadcast_address=HOST, port=wol.port)
+
+    assert fake_tv.received_uris()[-1] == f"ssap://{ep.POWER_ON}"
+    assert await wol.received(0) == []
+
+
+async def test_turn_on_standby_request_fails(
+    connected_client: WebOsClient, fake_tv: FakeTv, wol: WolReceiver
+) -> None:
+    """Test a failed turn on request falls back to Wake-on-LAN."""
+    await push_and_wait(
+        connected_client,
+        fake_tv,
+        ep.GET_POWER_STATE,
+        {"state": "Active Standby"},
+        lambda state: not state.is_on,
+    )
+    fake_tv.responses[ep.POWER_ON] = None
+
+    await connected_client.turn_on(broadcast_address=HOST, port=wol.port)
+
+    assert fake_tv.received_uris()[-1] == f"ssap://{ep.POWER_ON}"
+    assert await wol.received(6) == packets_for(WIRED_MAC, WIFI_MAC)
+
+
+@pytest.mark.usefixtures("fake_tv")
+async def test_turn_on_mac_addresses(wol: WolReceiver) -> None:
+    """Test turning on a disconnected TV with given MAC addresses."""
+    client = WebOsClient(HOST, CLIENT_KEY)
+
+    await client.turn_on(
+        # The same MAC address in another format is sent once
+        [WIRED_MAC, WIRED_MAC.lower().replace(":", "-"), WIFI_MAC],
+        broadcast_address=HOST,
+        port=wol.port,
+    )
+
+    assert await wol.received(6) == packets_for(WIRED_MAC, WIFI_MAC)
+
+
+async def test_turn_on_last_mac_addresses(
+    client: WebOsClient, fake_tv: FakeTv, wol: WolReceiver
+) -> None:
+    """Test the MAC addresses are remembered when reconnecting fails."""
+    assert await client.connect()
+    await client.disconnect()
+    fake_tv.booting = True
+
+    with pytest.raises(WebOsTvRegistrationError):
+        await client.connect()
+
+    await assert_disconnected(client)
+    assert client.tv_info.connection == {}
+    assert client.mac_addresses == {
+        "wired": WIRED_MAC.lower(),
+        "wifi": WIFI_MAC.lower(),
+    }
+
+    await client.turn_on(broadcast_address=HOST, port=wol.port)
+
+    # The p2p (Wi-Fi Direct) MAC address is not used
+    assert await wol.received(6) == packets_for(WIRED_MAC, WIFI_MAC)
+
+
+async def test_turn_on_given_mac_addresses_preferred(
+    client: WebOsClient, wol: WolReceiver
+) -> None:
+    """Test given MAC addresses are used over the remembered ones."""
+    assert await client.connect()
+    await client.disconnect()
+
+    await client.turn_on(["AA:BB:CC:00:00:09"], broadcast_address=HOST, port=wol.port)
+
+    assert await wol.received(3) == packets_for("AA:BB:CC:00:00:09")
+
+
+async def test_turn_on_no_mac_address(client: WebOsClient, fake_tv: FakeTv) -> None:
+    """Test turning on fails when the TV never reported a MAC address."""
+    # webOS 2.0 has no connection info service
+    fake_tv.responses[ep.GET_CONNECTION_INFO] = None
+    assert await client.connect()
+    await client.disconnect()
+
+    assert client.mac_addresses == {}
+    with pytest.raises(WebOsTvWakeError):
+        await client.turn_on()
+
+    with pytest.raises(WebOsTvWakeError):
+        await client.turn_on([])
+
+
+@pytest.mark.usefixtures("fake_tv")
+async def test_turn_on_invalid_mac_address() -> None:
+    """Test turning on with an invalid MAC address."""
+    client = WebOsClient(HOST, CLIENT_KEY)
+
+    with pytest.raises(ValueError, match="Invalid MAC address: invalid"):
+        await client.turn_on([WIRED_MAC, "invalid"])
+
+
+@pytest.mark.usefixtures("fake_tv")
+async def test_turn_on_send_error() -> None:
+    """Test a socket error raises a wake error."""
+    client = WebOsClient(HOST, CLIENT_KEY)
+
+    with (
+        patch.object(
+            client._loop,
+            "create_datagram_endpoint",
+            AsyncMock(side_effect=OSError("Network unreachable")),
+        ),
+        pytest.raises(WebOsTvWakeError, match="Network unreachable"),
+    ):
+        await client.turn_on([WIRED_MAC])
+
+
+@pytest.mark.usefixtures("fake_tv")
+async def test_turn_on_packet_rounds() -> None:
+    """Test the packet rounds are spaced and the socket is closed."""
+    client = WebOsClient(HOST, CLIENT_KEY)
+    transport = MagicMock()
+
+    with (
+        patch.object(
+            client._loop,
+            "create_datagram_endpoint",
+            AsyncMock(return_value=(transport, None)),
+        ),
+        patch.object(webos_client.asyncio, "sleep", AsyncMock()) as sleep,
+    ):
+        await client.turn_on([WIRED_MAC, WIFI_MAC])
+
+    assert sleep.await_count == webos_client.WOL_PACKET_COUNT - 1
+    sleep.assert_awaited_with(webos_client.WOL_PACKET_INTERVAL)
+    assert [c.args for c in transport.sendto.call_args_list] == [
+        (packet, ("255.255.255.255", 9)) for packet in packets_for(WIRED_MAC, WIFI_MAC)
+    ]
+    transport.close.assert_called_once()
+
+
+@pytest.mark.usefixtures("fake_tv")
+async def test_turn_on_cancelled_closes_socket() -> None:
+    """Test cancelling between packet rounds closes the socket."""
+    client = WebOsClient(HOST, CLIENT_KEY)
+    transport = MagicMock()
+    sleeping = asyncio.Event()
+
+    async def sleep(_delay: float) -> None:
+        sleeping.set()
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(
+            client._loop,
+            "create_datagram_endpoint",
+            AsyncMock(return_value=(transport, None)),
+        ),
+        patch.object(webos_client.asyncio, "sleep", sleep),
+    ):
+        task = asyncio.create_task(client.turn_on([WIRED_MAC]))
+        await sleeping.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    transport.sendto.assert_called_once()
+    transport.close.assert_called_once()
 
 
 async def test_volume_step_delay(

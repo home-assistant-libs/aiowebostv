@@ -20,13 +20,24 @@ NOT_FOUND = "404 no such service or method"
 
 BOOT_ERROR = "400 prevent registering your device with TV"
 
+# Shaped like real getinfo responses, which report uppercase MAC addresses
+WIRED_MAC = "AA:BB:CC:00:00:01"
+WIFI_MAC = "AA:BB:CC:00:00:02"
+P2P_MAC = "AA:BB:CC:00:00:03"
+
 
 def default_responses() -> dict[str, dict[str, Any] | None]:
     """Return default request/subscribe payloads keyed by endpoint uri."""
     return {
         ep.GET_SYSTEM_INFO: {"modelName": "OLED55C1", "returnValue": True},
         ep.GET_SOFTWARE_INFO: {"product_name": "webOSTV 6.0", "returnValue": True},
-        ep.GET_CONNECTION_INFO: {"wifiInfo": {}, "returnValue": True},
+        ep.GET_CONNECTION_INFO: {
+            "subscribed": False,
+            "returnValue": True,
+            "wifiInfo": {"macAddress": WIFI_MAC},
+            "wiredInfo": {"macAddress": WIRED_MAC},
+            "p2pInfo": {"macAddress": P2P_MAC},
+        },
         ep.GET_POWER_STATE: {"state": "Active", "returnValue": True},
         ep.GET_CURRENT_APP_INFO: {"appId": "com.webos.app.hdmi1", "returnValue": True},
         ep.GET_AUDIO_STATUS: {"mute": False, "returnValue": True},

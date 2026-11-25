@@ -5,6 +5,7 @@ from .exceptions import (
     WebOsTvPairError,
     WebOsTvRegistrationError,
     WebOsTvServiceNotFoundError,
+    WebOsTvWakeError,
 )
 from .models import WebOsTvInfo, WebOsTvState
 from .webos_client import WebOsClient
@@ -17,4 +18,5 @@ __all__ = [
     "WebOsTvRegistrationError",
     "WebOsTvServiceNotFoundError",
     "WebOsTvState",
+    "WebOsTvWakeError",
 ]
