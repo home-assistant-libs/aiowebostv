@@ -1279,79 +1279,6 @@ async def test_turn_on_standby(
     assert await wol.received(6) == packets_for(WIRED_MAC, WIFI_MAC)
 
 
-async def connect_in_standby_without_mac(
-    client: WebOsClient, fake_tv: FakeTv, power_state: str = "Active Standby"
-) -> None:
-    """Connect to a TV that reports no MAC addresses and put it in standby."""
-    fake_tv.responses[ep.GET_CONNECTION_INFO] = None
-    assert await client.connect()
-    assert client.mac_addresses == {}
-    await push_and_wait(
-        client,
-        fake_tv,
-        ep.GET_POWER_STATE,
-        {"state": power_state},
-        lambda state: not state.is_on,
-    )
-
-
-async def test_turn_on_standby_no_mac(client: WebOsClient, fake_tv: FakeTv) -> None:
-    """Test a TV in standby without MAC addresses is turned on with a request."""
-    await connect_in_standby_without_mac(client, fake_tv)
-    fake_tv.responses[ep.POWER_ON] = {"returnValue": True}
-
-    await client.turn_on()
-
-    assert fake_tv.received_uris()[-1] == f"ssap://{ep.POWER_ON}"
-
-
-async def test_turn_on_standby_no_mac_request_fails(
-    client: WebOsClient, fake_tv: FakeTv
-) -> None:
-    """Test a failed turn on request without MAC addresses raises."""
-    await connect_in_standby_without_mac(client, fake_tv)
-    fake_tv.responses[ep.POWER_ON] = None
-
-    with pytest.raises(WebOsTvWakeError):
-        await client.turn_on()
-
-    assert fake_tv.received_uris()[-1] == f"ssap://{ep.POWER_ON}"
-
-
-async def test_turn_on_standby_no_mac_connection_closed(
-    client: WebOsClient, fake_tv: FakeTv
-) -> None:
-    """Test the TV closing the connection during the request raises a wake error.
-
-    A TV going to suspend closes the connection, which cancels the request.
-    """
-    await connect_in_standby_without_mac(client, fake_tv, "Suspend")
-    fake_tv.responses.pop(ep.POWER_ON, None)
-
-    task = asyncio.create_task(client.turn_on())
-    await fake_tv.wait_for_message("request", ep.POWER_ON)
-    assert fake_tv.main_ws is not None
-    await fake_tv.main_ws.close()
-
-    with pytest.raises(WebOsTvWakeError):
-        await task
-
-
-async def test_turn_on_standby_no_mac_cancelled(
-    client: WebOsClient, fake_tv: FakeTv
-) -> None:
-    """Test cancelling turn_on during the request raises CancelledError."""
-    await connect_in_standby_without_mac(client, fake_tv)
-    fake_tv.responses.pop(ep.POWER_ON, None)
-
-    task = asyncio.create_task(client.turn_on())
-    await fake_tv.wait_for_message("request", ep.POWER_ON)
-    task.cancel()
-
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-
 @pytest.mark.usefixtures("fake_tv")
 async def test_turn_on_mac_addresses(wol: WolReceiver) -> None:
     """Test turning on a disconnected TV with given MAC addresses."""
@@ -1408,9 +1335,21 @@ async def test_turn_on_no_mac_address(client: WebOsClient, fake_tv: FakeTv) -> N
     # webOS 2.0 has no connection info service
     fake_tv.responses[ep.GET_CONNECTION_INFO] = None
     assert await client.connect()
-    await client.disconnect()
-
     assert client.mac_addresses == {}
+    await push_and_wait(
+        client,
+        fake_tv,
+        ep.GET_POWER_STATE,
+        {"state": "Active Standby"},
+        lambda state: not state.is_on,
+    )
+
+    # Connected in standby, no turn on request is sent
+    with pytest.raises(WebOsTvWakeError):
+        await client.turn_on()
+    assert f"ssap://{ep.POWER_ON}" not in fake_tv.received_uris()
+
+    await client.disconnect()
     with pytest.raises(WebOsTvWakeError):
         await client.turn_on()
 
