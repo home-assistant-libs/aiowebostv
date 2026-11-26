@@ -125,20 +125,25 @@ class WebOsClient:
         self._mac_addresses: dict[str, str] = {}
 
     async def connect(self) -> bool:
-        """Connect to webOS TV device."""
+        """Connect to webOS TV device.
+
+        Cancelling a caller does not stop the connection attempt, it is shared
+        by all callers and keeps running in the background. Use `disconnect()`
+        to stop it.
+        """
         if self.is_connected():
             _LOGGER.debug("connect(%s): already connected", self.host)
             return True
 
         if self.connect_task_active() and self.connect_result is not None:
             _LOGGER.debug("connect(%s): connection already in progress", self.host)
-            return await self.connect_result
+            return await asyncio.shield(self.connect_result)
 
         self.connect_result = self._loop.create_future()
         self.connect_task = asyncio.create_task(
             self.connect_handler(self.connect_result)
         )
-        return await self.connect_result
+        return await asyncio.shield(self.connect_result)
 
     async def disconnect(self) -> None:
         """Disconnect from webOS TV device."""
