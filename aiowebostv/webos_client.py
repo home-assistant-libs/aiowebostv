@@ -6,6 +6,7 @@ import copy
 import json
 import logging
 import socket
+import warnings
 from asyncio import Future, Task
 from asyncio.queues import Queue
 from collections.abc import Callable, Iterable
@@ -1119,7 +1120,16 @@ class WebOsClient:
     async def resubscribe(
         self, callback: Callable, uri: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Resubscribe to updates, subscribe() replaces an existing subscription."""
+        """Resubscribe to updates.
+
+        Deprecated, use subscribe(), it replaces an existing subscription.
+        """
+        warnings.warn(
+            "resubscribe() is deprecated, use subscribe(), it replaces an "
+            "existing subscription",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return await self.subscribe(callback, uri, payload)
 
     async def input_command(self, message: str) -> None:

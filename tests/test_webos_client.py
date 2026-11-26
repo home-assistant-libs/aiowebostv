@@ -1474,9 +1474,8 @@ async def test_connect_slow_state_callback(
     assert client.tv_state.current_app_id == "com.webos.app.hdmi1"
 
 
-@pytest.mark.parametrize("method", ["subscribe", "resubscribe"])
 async def test_subscribe_replaces_subscription(
-    connected_client: WebOsClient, fake_tv: FakeTv, method: str
+    connected_client: WebOsClient, fake_tv: FakeTv
 ) -> None:
     """Test subscribing to a subscribed uri replaces the subscription."""
     client = connected_client
@@ -1494,7 +1493,7 @@ async def test_subscribe_replaces_subscription(
     first_uid = client._subscriptions[ep.GET_SERVICES]
     first_task = client.callback_tasks[first_uid]
 
-    await getattr(client, method)(second_callback, ep.GET_SERVICES)
+    await client.subscribe(second_callback, ep.GET_SERVICES)
 
     assert first_task.done()
     assert first_uid not in client.callback_tasks
@@ -1509,6 +1508,23 @@ async def test_subscribe_replaces_subscription(
     await fake_tv.push(ep.GET_SERVICES, {"services": ["new"]})
     assert (await asyncio.wait_for(second.get(), 1))["services"] == ["new"]
     assert len(first) == 1
+
+
+async def test_resubscribe_deprecated(
+    connected_client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test resubscribe warns and replaces the subscription like subscribe."""
+    client = connected_client
+    fake_tv.responses[ep.GET_SERVICES] = {"services": [], "returnValue": True}
+    callback = AsyncMock()
+    await client.subscribe(callback, ep.GET_SERVICES)
+    first_uid = client._subscriptions[ep.GET_SERVICES]
+
+    with pytest.warns(DeprecationWarning, match="use subscribe"):
+        await client.resubscribe(callback, ep.GET_SERVICES)
+
+    assert client._subscriptions[ep.GET_SERVICES] != first_uid
+    assert first_uid not in client.callback_tasks
 
 
 async def test_subscribe_closed_before_first_update_processed(
