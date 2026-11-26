@@ -691,18 +691,68 @@ async def test_disconnect_while_connecting(
     assert not client.is_connected()
 
 
-async def test_pending_request_cancelled_on_disconnect(
-    connected_client: WebOsClient, fake_tv: FakeTv
+@pytest.mark.parametrize("closed_by", ["client", "tv"])
+async def test_pending_request_fails_on_close(
+    connected_client: WebOsClient, fake_tv: FakeTv, closed_by: str
 ) -> None:
-    """Test a request waiting for a response is cancelled when disconnected."""
+    """Test a request waiting for a response fails when the connection closes.
+
+    The request raises a command error, not CancelledError, the caller was
+    not cancelled.
+    """
     fake_tv.responses.pop(ep.GET_SERVICES, None)
     request = asyncio.create_task(connected_client.get_services())
     await fake_tv.wait_for_message("request", ep.GET_SERVICES)
 
-    await connected_client.disconnect()
+    if closed_by == "client":
+        await connected_client.disconnect()
+    else:
+        assert fake_tv.main_ws is not None
+        assert connected_client.connect_task is not None
+        await fake_tv.main_ws.close()
+        await asyncio.wait_for(connected_client.connect_task, 1)
 
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(WebOsTvCommandError, match="Connection closed"):
         await request
+    assert not request.cancelled()
+
+
+async def test_request_failing_to_send_on_close(
+    connected_client: WebOsClient,
+) -> None:
+    """Test a request failing to send while closing logs no unhandled error."""
+    assert connected_client.connection is not None
+    sending = asyncio.Event()
+
+    async def send_json(_message: dict[str, Any]) -> None:
+        sending.set()
+        # Fail after the connection closed and failed the pending future
+        await asyncio.sleep(0.1)
+        error = "Cannot write to closing transport"
+        raise ConnectionResetError(error)
+
+    unhandled_exceptions: list[dict[str, Any]] = []
+    loop = asyncio.get_running_loop()
+    orig_handler = loop.get_exception_handler()
+    loop.set_exception_handler(
+        lambda _loop, context: unhandled_exceptions.append(context)
+    )
+    try:
+        with patch.object(connected_client.connection, "send_json", send_json):
+            request = asyncio.create_task(connected_client.get_services())
+            await sending.wait()
+            await connected_client.disconnect()
+            with pytest.raises(ConnectionResetError):
+                await request
+        # The request traceback references the future, release it so a never
+        # retrieved exception is logged when the future is garbage collected
+        del request
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(orig_handler)
+
+    assert unhandled_exceptions == []
 
 
 @pytest.mark.usefixtures("fake_tv")
