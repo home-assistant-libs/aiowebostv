@@ -4,6 +4,8 @@ import asyncio
 import base64
 import gc
 import json
+import logging
+import socket
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
@@ -2054,51 +2056,106 @@ async def test_turn_on_invalid_mac_address() -> None:
         await client.turn_on([WIRED_MAC, "invalid"])
 
 
+async def test_create_wake_socket() -> None:
+    """Test the Wake-on-LAN socket is non-blocking and can broadcast."""
+    with webos_client._create_wake_socket() as sock:
+        assert not sock.getblocking()
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST)
+
+
+@pytest.mark.parametrize("failing", ["socket", "setsockopt"])
 @pytest.mark.usefixtures("fake_tv")
-async def test_turn_on_send_error() -> None:
-    """Test a socket error raises a wake error."""
+async def test_turn_on_socket_error(failing: str) -> None:
+    """Test failing to create the socket raises a wake error."""
     client = WebOsClient(HOST, CLIENT_KEY)
+    error = PermissionError("Operation not permitted")
+    sock = MagicMock()
+    socket_cls = MagicMock(return_value=sock)
+    if failing == "socket":
+        socket_cls.side_effect = error
+    else:
+        sock.setsockopt.side_effect = error
 
     with (
-        patch.object(
-            client._loop,
-            "create_datagram_endpoint",
-            AsyncMock(side_effect=OSError("Network unreachable")),
-        ),
-        pytest.raises(WebOsTvWakeError, match="Network unreachable"),
+        patch.object(webos_client.socket, "socket", socket_cls),
+        pytest.raises(WebOsTvWakeError, match="Operation not permitted") as exc_info,
     ):
         await client.turn_on([WIRED_MAC])
+
+    assert exc_info.value.__cause__ is error
+    if failing == "setsockopt":
+        sock.close.assert_called_once()
+
+
+@pytest.mark.usefixtures("fake_tv")
+async def test_turn_on_all_packets_failed() -> None:
+    """Test a wake error when every packet fails to send."""
+    client = WebOsClient(HOST, CLIENT_KEY)
+    sock = MagicMock()
+    error = OSError("No route to host")
+    sock.sendto.side_effect = error
+
+    with (
+        patch.object(webos_client, "_create_wake_socket", return_value=sock),
+        patch.object(webos_client.asyncio, "sleep", AsyncMock()),
+        pytest.raises(WebOsTvWakeError, match="No route to host") as exc_info,
+    ):
+        await client.turn_on([WIRED_MAC, WIFI_MAC])
+
+    assert exc_info.value.__cause__ is error
+    assert sock.sendto.call_count == 2 * webos_client.WOL_PACKET_COUNT
+    sock.close.assert_called_once()
+
+
+@pytest.mark.usefixtures("fake_tv")
+async def test_turn_on_some_packets_failed(caplog: pytest.LogCaptureFixture) -> None:
+    """Test no error when some packets were sent, they may wake the TV."""
+    caplog.set_level(logging.DEBUG)
+    client = WebOsClient(HOST, CLIENT_KEY)
+    sock = MagicMock()
+    sock.sendto.side_effect = [
+        BlockingIOError("Resource temporarily unavailable"),
+        *[None] * (webos_client.WOL_PACKET_COUNT - 1),
+    ]
+
+    with (
+        patch.object(webos_client, "_create_wake_socket", return_value=sock),
+        patch.object(webos_client.asyncio, "sleep", AsyncMock()),
+    ):
+        await client.turn_on([WIRED_MAC])
+
+    assert sock.sendto.call_count == webos_client.WOL_PACKET_COUNT
+    assert (
+        f"1 of {webos_client.WOL_PACKET_COUNT} Wake-on-LAN packets failed: "
+        "Resource temporarily unavailable"
+    ) in caplog.text
 
 
 @pytest.mark.usefixtures("fake_tv")
 async def test_turn_on_packet_rounds() -> None:
     """Test the packet rounds are spaced and the socket is closed."""
     client = WebOsClient(HOST, CLIENT_KEY)
-    transport = MagicMock()
+    sock = MagicMock()
 
     with (
-        patch.object(
-            client._loop,
-            "create_datagram_endpoint",
-            AsyncMock(return_value=(transport, None)),
-        ),
+        patch.object(webos_client, "_create_wake_socket", return_value=sock),
         patch.object(webos_client.asyncio, "sleep", AsyncMock()) as sleep,
     ):
         await client.turn_on([WIRED_MAC, WIFI_MAC])
 
     assert sleep.await_count == webos_client.WOL_PACKET_COUNT - 1
     sleep.assert_awaited_with(webos_client.WOL_PACKET_INTERVAL)
-    assert [c.args for c in transport.sendto.call_args_list] == [
+    assert [c.args for c in sock.sendto.call_args_list] == [
         (packet, ("255.255.255.255", 9)) for packet in packets_for(WIRED_MAC, WIFI_MAC)
     ]
-    transport.close.assert_called_once()
+    sock.close.assert_called_once()
 
 
 @pytest.mark.usefixtures("fake_tv")
 async def test_turn_on_cancelled_closes_socket() -> None:
     """Test cancelling between packet rounds closes the socket."""
     client = WebOsClient(HOST, CLIENT_KEY)
-    transport = MagicMock()
+    sock = MagicMock()
     sleeping = asyncio.Event()
 
     async def sleep(_delay: float) -> None:
@@ -2106,11 +2163,7 @@ async def test_turn_on_cancelled_closes_socket() -> None:
         await asyncio.Event().wait()
 
     with (
-        patch.object(
-            client._loop,
-            "create_datagram_endpoint",
-            AsyncMock(return_value=(transport, None)),
-        ),
+        patch.object(webos_client, "_create_wake_socket", return_value=sock),
         patch.object(webos_client.asyncio, "sleep", sleep),
     ):
         task = asyncio.create_task(client.turn_on([WIRED_MAC]))
@@ -2119,8 +2172,8 @@ async def test_turn_on_cancelled_closes_socket() -> None:
         with pytest.raises(asyncio.CancelledError):
             await task
 
-    transport.sendto.assert_called_once()
-    transport.close.assert_called_once()
+    sock.sendto.assert_called_once()
+    sock.close.assert_called_once()
 
 
 async def test_volume_step_delay(

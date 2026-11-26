@@ -60,6 +60,18 @@ WOL_INTERFACES = {"wired": "wiredInfo", "wifi": "wifiInfo"}
 _LOGGER = logging.getLogger(__package__)
 
 
+def _create_wake_socket() -> socket.socket:
+    """Create a non-blocking UDP socket that can send broadcasts."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setblocking(False)  # noqa: FBT003
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
+
 def normalize_mac(mac: str) -> str | None:
     """Return the MAC address as lowercase colon separated, None if invalid."""
     if "/" in mac:
@@ -1286,24 +1298,42 @@ class WebOsClient:
             broadcast_address,
             port,
         )
+        # Send with a plain socket, a datagram transport passes send errors to
+        # its protocol together with errors from its reads (on Windows even
+        # when the sends succeed), and uvloop has no loop.sock_sendto. A UDP
+        # send does not block, a full buffer fails like any other send.
         try:
-            transport, _ = await self._loop.create_datagram_endpoint(
-                asyncio.DatagramProtocol,
-                family=socket.AF_INET,
-                allow_broadcast=True,
-            )
+            sock = _create_wake_socket()
         except OSError as err:
             error = f"Failed to send Wake-on-LAN packets: {err}"
             raise WebOsTvWakeError(error) from err
 
+        errors: list[OSError] = []
         try:
             for packet_round in range(WOL_PACKET_COUNT):
                 if packet_round:
                     await asyncio.sleep(WOL_PACKET_INTERVAL)
                 for packet in packets:
-                    transport.sendto(packet, (broadcast_address, port))
+                    try:
+                        sock.sendto(packet, (broadcast_address, port))
+                    except OSError as err:
+                        errors.append(err)
         finally:
-            transport.close()
+            sock.close()
+
+        # A packet that was sent may wake the TV, fail only if none was
+        sent_count = WOL_PACKET_COUNT * len(packets)
+        if len(errors) == sent_count:
+            error = f"Failed to send Wake-on-LAN packets: {errors[-1]}"
+            raise WebOsTvWakeError(error) from errors[-1]
+        if errors:
+            _LOGGER.debug(
+                "turn_on(%s): %s of %s Wake-on-LAN packets failed: %s",
+                self.host,
+                len(errors),
+                sent_count,
+                errors[-1],
+            )
 
     # 3D Mode
     async def turn_3d_on(self) -> dict[str, Any]:
