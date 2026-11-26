@@ -1259,6 +1259,75 @@ async def test_failing_subscription_callback_keeps_handling_updates(
     assert "KeyError: 'unknown'" in caplog.text
 
 
+async def test_subscribe_slow_callback(
+    connected_client: WebOsClient,
+    fake_tv: FakeTv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test a callback slower than the request timeout does not time out.
+
+    The request timeout covers the TV's response only, subscribe still
+    returns after the callback processed the first update.
+    """
+    monkeypatch.setattr(webos_client, "REQUEST_TIMEOUT", 0.1)
+    fake_tv.responses[ep.GET_SERVICES] = {"services": [], "returnValue": True}
+    processed = asyncio.Event()
+
+    async def slow_callback(_payload: dict[str, Any]) -> None:
+        await asyncio.sleep(0.3)
+        processed.set()
+
+    response = await connected_client.subscribe(slow_callback, ep.GET_SERVICES)
+
+    assert response == {"services": [], "returnValue": True}
+    assert processed.is_set()
+
+
+async def test_connect_slow_state_callback(
+    client: WebOsClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test a state callback slower than the request timeout does not fail connect.
+
+    The current app callback can take long, it subscribes to the channels
+    and the current channel when Live TV runs.
+    """
+    monkeypatch.setattr(webos_client, "REQUEST_TIMEOUT", 0.1)
+    set_current_app_state = client.set_current_app_state
+
+    async def slow_set_current_app_state(app_id: str) -> None:
+        await asyncio.sleep(0.3)
+        await set_current_app_state(app_id)
+
+    monkeypatch.setattr(client, "set_current_app_state", slow_set_current_app_state)
+
+    assert await client.connect()
+
+    assert client.tv_state.current_app_id == "com.webos.app.hdmi1"
+
+
+async def test_subscribe_closed_before_first_update_processed(
+    connected_client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test subscribe fails when the connection closes during the first update."""
+    fake_tv.responses[ep.GET_SERVICES] = {"services": [], "returnValue": True}
+    processing = asyncio.Event()
+
+    async def hanging_callback(_payload: dict[str, Any]) -> None:
+        processing.set()
+        await asyncio.Event().wait()
+
+    subscribe = asyncio.create_task(
+        connected_client.subscribe(hanging_callback, ep.GET_SERVICES)
+    )
+    await asyncio.wait_for(processing.wait(), 1)
+
+    await connected_client.disconnect()
+
+    with pytest.raises(WebOsTvCommandError, match="closed"):
+        await asyncio.wait_for(subscribe, 1)
+    assert ep.GET_SERVICES not in connected_client._subscriptions
+
+
 async def test_live_tv_channel_subscriptions(
     connected_client: WebOsClient, fake_tv: FakeTv
 ) -> None:

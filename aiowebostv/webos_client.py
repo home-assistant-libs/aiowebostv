@@ -585,16 +585,15 @@ class WebOsClient:
         self,
         queue: Queue[dict[str, Any]],
         callback: Callable,
-        future: Future[dict[str, Any]],
+        processed: Future[None],
     ) -> None:
         """Handle callbacks.
 
         Error messages are not passed to the callback, they carry no state.
         A failing callback is logged and must not stop the handler, the
-        subscription would stop updating and the first message would never
-        resolve the future, leaving the subscribe request waiting for its
-        timeout. The first message always resolves the future, so the
-        subscribe request can raise for an error response.
+        subscription would stop updating and subscribe() would wait for the
+        first update until the handler is cancelled. The first message always
+        resolves the processed future.
         """
         with suppress(asyncio.CancelledError):
             while True:
@@ -608,18 +607,20 @@ class WebOsClient:
                         _LOGGER.exception(
                             "subscription callback(%s): error for %s", self.host, msg
                         )
-                if not future.done():
-                    future.set_result(msg)
+                if not processed.done():
+                    processed.set_result(None)
 
     def _process_text_message(self, data: str) -> None:
         """Process text message."""
         msg = json.loads(data)
         uid = msg.get("id")
         # if we have a callback for this message, put it in the queue
-        # let the callback handle the message and mark the future as done
         if queue := self.callback_queues.get(uid):
             queue.put_nowait(msg)
-        elif future := self.futures.get(uid):
+        # Resolve the response future of a request, or of a subscribe request
+        # on its first message, without waiting for the callback, the request
+        # timeout covers the TV's response only
+        if (future := self.futures.get(uid)) and not future.done():
             future.set_result(msg)
 
     async def _rx_msgs_main_ws(self, web_socket: ClientWebSocketResponse) -> None:
@@ -935,19 +936,22 @@ class WebOsClient:
 
     async def create_subscription_handler(
         self, uri: str, uid: int, callback: Callable
-    ) -> None:
+    ) -> Future[None]:
         """Create a subscription handler for a given uri & uid.
 
-        Create a queue to store the messages, a task to handle the messages
-        and a future to signal first subscription update processed.
+        Create a queue to store the messages, a task to handle the messages,
+        a future for the subscribe response and return a future to signal
+        the first subscription update processed.
         """
         self._subscriptions[uri] = uid
-        self.futures[uid] = future = self._loop.create_future()
+        self.futures[uid] = self._loop.create_future()
+        processed: Future[None] = self._loop.create_future()
         queue: Queue[dict[str, Any]] = asyncio.Queue()
         self.callback_queues[uid] = queue
         self.callback_tasks[uid] = asyncio.create_task(
-            self.callback_handler(queue, callback, future)
+            self.callback_handler(queue, callback, processed)
         )
+        return processed
 
     async def delete_subscription_handler(self, uri: str) -> None:
         """Delete a subscription handler for a given uri."""
@@ -977,15 +981,35 @@ class WebOsClient:
         """
         uid = self.command_count
         self.command_count += 1
-        await self.create_subscription_handler(uri, uid, callback)
+        processed = await self.create_subscription_handler(uri, uid, callback)
+        task = self.callback_tasks[uid]
 
         try:
-            return await self.request(
+            response = await self.request(
                 uri, payload=payload, cmd_type="subscribe", uid=uid
             )
+            await self._wait_first_update(uri, processed, task)
         except Exception:
-            await self.delete_subscription_handler(uri)
+            # The handler may have been deleted or replaced meanwhile
+            if self._subscriptions.get(uri) == uid:
+                await self.delete_subscription_handler(uri)
             raise
+
+        return response
+
+    @staticmethod
+    async def _wait_first_update(uri: str, processed: Future[None], task: Task) -> None:
+        """Wait for the callback to process the first subscription update.
+
+        So the state is set when subscribe returns. Not limited by the request
+        timeout, the callback may make requests of its own. Stop waiting if
+        the handler stops, it is cancelled when the subscription is deleted or
+        the connection closes.
+        """
+        await asyncio.wait({processed, task}, return_when=asyncio.FIRST_COMPLETED)
+        if not processed.done():
+            error = f"Subscription to {uri} closed"
+            raise WebOsTvCommandError(error)
 
     async def unsubscribe(self, uri: str) -> None:
         """Unsubscribe from updates by uri.
