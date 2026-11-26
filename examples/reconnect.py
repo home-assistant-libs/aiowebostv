@@ -5,19 +5,7 @@ import signal
 from contextlib import suppress
 from datetime import UTC, datetime
 
-import aiohttp
-
-from aiowebostv import WebOsClient
-from aiowebostv.exceptions import WebOsTvCommandError
-
-WEBOSTV_EXCEPTIONS = (
-    ConnectionResetError,
-    WebOsTvCommandError,
-    aiohttp.ClientConnectorError,
-    aiohttp.ServerDisconnectedError,
-    asyncio.CancelledError,
-    asyncio.TimeoutError,
-)
+from aiowebostv import WebOsClient, WebOsTvConnectionError
 
 HOST = "192.168.1.39"
 # For first time pairing set key to None
@@ -44,7 +32,7 @@ async def main() -> None:
         if is_connected:
             continue
 
-        with suppress(*WEBOSTV_EXCEPTIONS):
+        with suppress(WebOsTvConnectionError):
             await client.connect()
 
     await client.disconnect()

@@ -6,11 +6,10 @@ import copy
 import json
 import logging
 import socket
-import warnings
 from asyncio import Future, Task
 from asyncio.queues import Queue
-from collections.abc import Callable, Iterable
-from contextlib import suppress
+from collections.abc import Callable, Generator, Iterable
+from contextlib import contextmanager, suppress
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -23,6 +22,7 @@ from . import endpoints as ep
 from .exceptions import (
     WebOsTvCommandError,
     WebOsTvCommandTimeoutError,
+    WebOsTvConnectionError,
     WebOsTvPairError,
     WebOsTvRegistrationError,
     WebOsTvResponseTypeError,
@@ -62,6 +62,22 @@ WOL_PACKET_INTERVAL = 0.1  # seconds between rounds
 WOL_INTERFACES = {"wired": "wiredInfo", "wifi": "wifiInfo"}
 
 _LOGGER = logging.getLogger(__package__)
+
+
+@contextmanager
+def _handshake_step(step: str) -> Generator[None]:
+    """Raise WebOsTvConnectionError for a handshake step that failed.
+
+    A timeout or a send on a closed connection would not say which step.
+    """
+    try:
+        yield
+    except TimeoutError as err:
+        error = f"Timed out waiting for the {step} response"
+        raise WebOsTvConnectionError(error) from err
+    except aiohttp.ClientError as err:
+        error = f"Connection failed during the {step}: {err}"
+        raise WebOsTvConnectionError(error) from err
 
 
 def _create_wake_socket() -> socket.socket:
@@ -157,6 +173,10 @@ class WebOsClient:
 
         If the previous connection is still closing, wait for it to close and
         connect again.
+
+        Raises WebOsTvPairError if pairing fails, the user has to pair again,
+        and WebOsTvConnectionError for any other failure. Returns False if
+        disconnect() stops the attempt.
         """
         while True:
             if self.is_connected():
@@ -269,7 +289,7 @@ class WebOsClient:
         return handshake
 
     async def _ws_connect(self, uri: str, max_msg_size: int) -> ClientWebSocketResponse:
-        """Create websocket connection."""
+        """Create websocket connection, raise WebOsTvConnectionError on failure."""
         _LOGGER.debug(
             "connect(%s): uri: %s, max_msg_size: %s", self.host, uri, max_msg_size
         )
@@ -278,13 +298,20 @@ class WebOsClient:
             assert self.client_session is not None
 
         # webOS uses self-signed certificates, disable SSL certificate validation
-        async with asyncio.timeout(self.timeout_connect):
-            return await self.client_session.ws_connect(
-                uri,
-                heartbeat=self.heartbeat,
-                ssl=False,
-                max_msg_size=max_msg_size,
-            )
+        try:
+            async with asyncio.timeout(self.timeout_connect):
+                return await self.client_session.ws_connect(
+                    uri,
+                    heartbeat=self.heartbeat,
+                    ssl=False,
+                    max_msg_size=max_msg_size,
+                )
+        except TimeoutError as err:
+            error = f"Timed out connecting to {uri}"
+            raise WebOsTvConnectionError(error) from err
+        except aiohttp.ClientError as err:
+            error = f"Failed to connect to {uri}: {err!r}"
+            raise WebOsTvConnectionError(error) from err
 
     async def close_client_session(self) -> None:
         """Close client session if we created it."""
@@ -308,14 +335,9 @@ class WebOsClient:
         first, second = (wss_uri, ws_uri) if self._prefer_wss else (ws_uri, wss_uri)
         try:
             return await self._ws_connect(first, MAIN_WS_MAX_MSG_SIZE)
-        # ClientConnectionError: port closed/reset or TLS error
-        # WSServerHandshakeError: firmware enforces the other scheme
-        # TimeoutError: port accepts TCP but never answers the handshake
-        except (
-            aiohttp.ClientConnectionError,
-            aiohttp.WSServerHandshakeError,
-            TimeoutError,
-        ) as err:
+        # Port closed/reset, TLS error, firmware enforcing the other scheme or
+        # a port that accepts TCP but never answers the handshake
+        except WebOsTvConnectionError as err:
             _LOGGER.debug(
                 "connect(%s): %s failed (%r), falling back", self.host, first, err
             )
@@ -334,43 +356,44 @@ class WebOsClient:
     ) -> dict[str, Any]:
         """Receive a handshake message.
 
-        Raise WebOsTvCommandError if the connection closes or the message is
-        malformed, instead of a TypeError, ValueError or KeyError. A missing
+        Raise WebOsTvConnectionError if the connection closes or the message
+        is malformed, instead of a TypeError, ValueError or KeyError. A missing
         or null payload is returned as an empty dict.
         """
         msg = await ws.receive()
         if msg.type is not WSMsgType.TEXT:
             error = f"Connection closed during handshake: {msg.type.name} {msg.data}"
-            raise WebOsTvCommandError(error)
+            raise WebOsTvConnectionError(error)
         try:
             response = json.loads(msg.data)
         except ValueError as err:
             error = f"Invalid handshake message {msg.data!r}"
-            raise WebOsTvCommandError(error) from err
+            raise WebOsTvConnectionError(error) from err
         if not isinstance(response, dict) or not isinstance(response.get("type"), str):
             error = f"Invalid handshake message {response}"
-            raise WebOsTvCommandError(error)
+            raise WebOsTvConnectionError(error)
         payload = response.get("payload")
         if payload is None:
             response["payload"] = {}
         elif not isinstance(payload, dict):
             error = f"Invalid handshake message payload {response}"
-            raise WebOsTvCommandError(error)
+            raise WebOsTvConnectionError(error)
         return response
 
     async def _get_hello_info(self, ws: ClientWebSocketResponse) -> None:
         """Get hello info."""
         _LOGGER.debug("send(%s): hello", self.host)
-        await ws.send_json({"id": "hello", "type": "hello", "payload": {}})
-        async with asyncio.timeout(RECEIVE_TIMEOUT):
-            response = await self._receive_handshake_msg(ws)
+        with _handshake_step("hello"):
+            await ws.send_json({"id": "hello", "type": "hello", "payload": {}})
+            async with asyncio.timeout(RECEIVE_TIMEOUT):
+                response = await self._receive_handshake_msg(ws)
         _LOGGER.debug("recv(%s): %s", self.host, response)
 
         if response["type"] == "hello":
             self.tv_info.hello = response["payload"]
         else:
             error = f"Invalid response type {response}"
-            raise WebOsTvCommandError(error)
+            raise WebOsTvConnectionError(error)
 
     async def _get_pre_reg_system_info(self, ws: ClientWebSocketResponse) -> None:
         """Get system info before registration.
@@ -384,9 +407,10 @@ class WebOsClient:
             "payload": {},
         }
         _LOGGER.debug("send(%s): %s", self.host, request)
-        await ws.send_json(request)
-        async with asyncio.timeout(RECEIVE_TIMEOUT):
-            response = await self._receive_handshake_msg(ws)
+        with _handshake_step("system info"):
+            await ws.send_json(request)
+            async with asyncio.timeout(RECEIVE_TIMEOUT):
+                response = await self._receive_handshake_msg(ws)
         _LOGGER.debug("recv(%s): %s", self.host, response)
 
         with suppress(WebOsTvResponseTypeError):
@@ -395,9 +419,10 @@ class WebOsClient:
     async def _send_registration(self, ws: ClientWebSocketResponse) -> dict[str, Any]:
         """Send the registration message and return the first response."""
         _LOGGER.debug("send(%s): registration", self.host)
-        await ws.send_json(self.registration_msg())
-        async with asyncio.timeout(RECEIVE_TIMEOUT):
-            response = await self._receive_handshake_msg(ws)
+        with _handshake_step("registration"):
+            await ws.send_json(self.registration_msg())
+            async with asyncio.timeout(RECEIVE_TIMEOUT):
+                response = await self._receive_handshake_msg(ws)
         _LOGGER.debug("recv(%s): registration", self.host)
         return response
 
@@ -427,8 +452,9 @@ class WebOsClient:
             and response["payload"].get("pairingType") == "PROMPT"
         ):
             # The user answers the prompt on the TV
-            async with asyncio.timeout(PAIRING_TIMEOUT):
-                response = await self._receive_handshake_msg(ws)
+            with _handshake_step("pairing prompt"):
+                async with asyncio.timeout(PAIRING_TIMEOUT):
+                    response = await self._receive_handshake_msg(ws)
             _LOGGER.debug("recv(%s): pairing", self.host)
         _LOGGER.debug(
             "pairing(%s): type: %s, error: %s",
@@ -631,18 +657,28 @@ class WebOsClient:
             await self._get_states_and_subscribe_state_updates()
             res.set_result(True)
             await asyncio.wait(self._rx_tasks, return_when=asyncio.FIRST_COMPLETED)
-        except TimeoutError:
-            _LOGGER.debug("timeout(%s): connection", self.host)
-            if not res.done():
-                res.set_exception(asyncio.TimeoutError)
         except Exception as ex:
             _LOGGER.debug("exception(%s): %r", self.host, ex, exc_info=True)
-            if not res.done():
-                res.set_exception(ex)
-            else:
+            if res.done():
                 raise
+            res.set_exception(self._connect_error(ex))
         finally:
             await self._closeout_tasks(main_ws, input_ws)
+
+    @staticmethod
+    def _connect_error(err: Exception) -> Exception:
+        """Return the error connect() raises for a failed connection.
+
+        WebOsTvPairError, or WebOsTvConnectionError caused by the failure,
+        e.g. a request failing while getting the initial state.
+        """
+        if isinstance(err, WebOsTvPairError | WebOsTvConnectionError):
+            return err
+        error = WebOsTvConnectionError(
+            f"Failed to connect: {str(err) or type(err).__name__}"
+        )
+        error.__cause__ = err
+        return error
 
     async def callback_handler(
         self,
@@ -1133,21 +1169,6 @@ class WebOsClient:
             await self.command("unsubscribe", uri, uid=uid)
         finally:
             await self.delete_subscription_handler(uri)
-
-    async def resubscribe(
-        self, callback: Callable, uri: str, payload: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """Resubscribe to updates.
-
-        Deprecated, use subscribe(), it replaces an existing subscription.
-        """
-        warnings.warn(
-            "resubscribe() is deprecated, use subscribe(), it replaces an "
-            "existing subscription",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return await self.subscribe(callback, uri, payload)
 
     async def input_command(self, message: str) -> None:
         """Execute TV input command."""

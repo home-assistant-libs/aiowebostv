@@ -20,6 +20,7 @@ from wakeonlan import create_magic_packet
 from aiowebostv import (
     WebOsClient,
     WebOsTvCommandError,
+    WebOsTvConnectionError,
     WebOsTvPairError,
     WebOsTvRegistrationError,
     WebOsTvServiceNotFoundError,
@@ -234,8 +235,11 @@ async def test_pairing_timeout(
 
     loop = asyncio.get_running_loop()
     start = loop.time()
-    with pytest.raises(TimeoutError):
+    with pytest.raises(
+        WebOsTvConnectionError, match="Timed out waiting for the pairing prompt"
+    ) as exc_info:
         await client.connect()
+    assert isinstance(exc_info.value.__cause__, TimeoutError)
 
     # The pairing timeout, not the receive timeout or the TV's answer
     assert loop.time() - start < 1
@@ -454,7 +458,7 @@ async def test_registration_error_while_booting(
         await client.connect()
 
     await assert_disconnected(client)
-    assert isinstance(WebOsTvRegistrationError(), WebOsTvCommandError)
+    assert isinstance(WebOsTvRegistrationError(), WebOsTvConnectionError)
     assert client.signed_manifest
     assert client.client_key == CLIENT_KEY
 
@@ -486,7 +490,7 @@ async def test_invalid_hello_response(client: WebOsClient, fake_tv: FakeTv) -> N
     """Test an invalid hello response fails the connection."""
     fake_tv.hello_type = "error"
 
-    with pytest.raises(WebOsTvCommandError, match="Invalid response type"):
+    with pytest.raises(WebOsTvConnectionError, match="Invalid response type"):
         await client.connect()
 
     await assert_disconnected(client)
@@ -505,10 +509,10 @@ async def test_invalid_hello_response(client: WebOsClient, fake_tv: FakeTv) -> N
 async def test_malformed_handshake_message(
     client: WebOsClient, fake_tv: FakeTv, hello_reply: str, error: str
 ) -> None:
-    """Test a malformed handshake message or close raises a command error."""
+    """Test a malformed handshake message or close raises a connection error."""
     fake_tv.hello_reply = hello_reply
 
-    with pytest.raises(WebOsTvCommandError, match=error):
+    with pytest.raises(WebOsTvConnectionError, match=error):
         await client.connect()
 
     await assert_disconnected(client)
@@ -525,13 +529,44 @@ async def test_check_registration_registered_null_payload() -> None:
     assert client.client_key == "stored-key"
 
 
+async def test_handshake_send_error() -> None:
+    """Test a handshake send on a closed connection raises a connection error."""
+    ws = AsyncMock()
+    error = aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+    ws.send_json.side_effect = error
+    client = WebOsClient(HOST)
+
+    with pytest.raises(
+        WebOsTvConnectionError, match="Connection failed during the hello"
+    ) as exc_info:
+        await client._get_hello_info(ws)
+
+    assert exc_info.value.__cause__ is error
+
+
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (KeyError("socketPath"), "Failed to connect: 'socketPath'"),
+        (RuntimeError(), "Failed to connect: RuntimeError"),
+    ],
+)
+async def test_connect_error_wraps(error: Exception, message: str) -> None:
+    """Test an unexpected connect failure is a connection error caused by it."""
+    wrapped = WebOsClient._connect_error(error)
+
+    assert isinstance(wrapped, WebOsTvConnectionError)
+    assert str(wrapped) == message
+    assert wrapped.__cause__ is error
+
+
 async def test_is_connected_during_failed_connect_closeout(
     client: WebOsClient, fake_tv: FakeTv
 ) -> None:
     """Test is_connected does not raise while a failed connection closes out."""
     fake_tv.hello_type = "error"
 
-    with pytest.raises(WebOsTvCommandError):
+    with pytest.raises(WebOsTvConnectionError):
         await client.connect()
 
     assert client.connect_task_active()
@@ -558,8 +593,10 @@ async def test_tv_closes_during_connect(
     assert fake_tv.main_ws is not None
     await fake_tv.main_ws.close()
 
-    with pytest.raises(WebOsTvCommandError, match="Connection closed"):
+    with pytest.raises(WebOsTvConnectionError, match="Connection closed") as exc_info:
         await asyncio.wait_for(connect, 1)
+    # The failed setup request is the cause
+    assert isinstance(exc_info.value.__cause__, WebOsTvCommandError)
     await assert_disconnected(client)
 
 
@@ -570,7 +607,9 @@ async def test_connect_timeout(
     monkeypatch.setattr(webos_client, "RECEIVE_TIMEOUT", 0.05)
     fake_tv.respond_to_hello = False
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(
+        WebOsTvConnectionError, match="Timed out waiting for the hello response"
+    ):
         await client.connect()
 
     await assert_disconnected(client)
@@ -593,22 +632,51 @@ async def test_connect_unreachable(
             client_session=session if external_session else None,
         )
 
-        with pytest.raises((aiohttp.ClientConnectionError, TimeoutError)):
+        with pytest.raises(WebOsTvConnectionError, match="connect") as exc_info:
             await client.connect()
+        assert isinstance(
+            exc_info.value.__cause__, aiohttp.ClientConnectionError | TimeoutError
+        )
 
         await assert_disconnected(client)
 
 
-MAIN_WS_ERRORS = [
-    aiohttp.ClientConnectionError(),
-    aiohttp.WSServerHandshakeError(None, ()),
-    TimeoutError(),
-]
+WS_CONNECT_ERROR = WebOsTvConnectionError("Failed to connect")
 
 
 def _uris(ws_connect: AsyncMock) -> list[str]:
     """Return the URIs passed to a patched _ws_connect."""
     return [call.args[0] for call in ws_connect.call_args_list]
+
+
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (aiohttp.ClientConnectionError("refused"), "Failed to connect to ws://"),
+        (
+            aiohttp.WSServerHandshakeError(MagicMock(), (), status=403),
+            "Failed to connect to ws://",
+        ),
+        (TimeoutError(), "Timed out connecting to ws://"),
+    ],
+)
+@pytest.mark.usefixtures("fake_tv")
+async def test_ws_connect_error(error: Exception, message: str) -> None:
+    """Test failing to open a websocket raises a connection error."""
+    client = WebOsClient(HOST)
+    client._ensure_client_session()
+    assert client.client_session is not None
+
+    try:
+        with (
+            patch.object(client.client_session, "ws_connect", side_effect=error),
+            pytest.raises(WebOsTvConnectionError, match=message) as exc_info,
+        ):
+            await client._ws_connect(f"ws://{HOST}:3000", 1024)
+    finally:
+        await client.close_client_session()
+
+    assert exc_info.value.__cause__ is error
 
 
 async def test_main_ws_prefers_wss() -> None:
@@ -623,23 +691,23 @@ async def test_main_ws_prefers_wss() -> None:
     assert _uris(ws_connect) == [wss_uri, wss_uri]
 
 
-@pytest.mark.parametrize("error", MAIN_WS_ERRORS)
-async def test_main_ws_falls_back_to_ws_and_remembers(error: Exception) -> None:
+async def test_main_ws_falls_back_to_ws_and_remembers() -> None:
     """Test falling back to ws when wss fails, and preferring ws afterwards."""
     client = WebOsClient(HOST)
     wss_uri = f"wss://{HOST}:{webos_client.WSS_PORT}"
     ws_uri = f"ws://{HOST}:{webos_client.WS_PORT}"
     ws = object()
 
-    with patch.object(client, "_ws_connect", side_effect=[error, ws, ws]) as ws_connect:
+    with patch.object(
+        client, "_ws_connect", side_effect=[WS_CONNECT_ERROR, ws, ws]
+    ) as ws_connect:
         assert await client._create_main_ws() is ws
         assert await client._create_main_ws() is ws
 
     assert _uris(ws_connect) == [wss_uri, ws_uri, ws_uri]
 
 
-@pytest.mark.parametrize("error", MAIN_WS_ERRORS)
-async def test_main_ws_falls_back_to_wss_after_ws_preference(error: Exception) -> None:
+async def test_main_ws_falls_back_to_wss_after_ws_preference() -> None:
     """Test returning to wss when the remembered ws scheme fails."""
     client = WebOsClient(HOST)
     wss_uri = f"wss://{HOST}:{webos_client.WSS_PORT}"
@@ -649,7 +717,7 @@ async def test_main_ws_falls_back_to_wss_after_ws_preference(error: Exception) -
     with patch.object(
         client,
         "_ws_connect",
-        side_effect=[aiohttp.ClientConnectionError(), ws, error, ws, ws],
+        side_effect=[WS_CONNECT_ERROR, ws, WS_CONNECT_ERROR, ws, ws],
     ) as ws_connect:
         for _ in range(3):
             assert await client._create_main_ws() is ws
@@ -666,9 +734,9 @@ async def test_main_ws_both_schemes_fail_keeps_preference() -> None:
     with patch.object(
         client,
         "_ws_connect",
-        side_effect=[TimeoutError(), TimeoutError(), object()],
+        side_effect=[WS_CONNECT_ERROR, WS_CONNECT_ERROR, object()],
     ) as ws_connect:
-        with pytest.raises(TimeoutError):
+        with pytest.raises(WebOsTvConnectionError):
             await client._create_main_ws()
         await client._create_main_ws()
 
@@ -1130,7 +1198,7 @@ async def test_failed_connect_does_not_call_callbacks(
     await client.register_state_update_callback(callback)
     fake_tv.hello_type = "error"
 
-    with pytest.raises(WebOsTvCommandError):
+    with pytest.raises(WebOsTvConnectionError):
         await client.connect()
     await assert_disconnected(client)
 
@@ -1615,23 +1683,6 @@ async def test_subscribe_replaces_subscription(
     await fake_tv.push(ep.GET_SERVICES, {"services": ["new"]})
     assert (await asyncio.wait_for(second.get(), 1))["services"] == ["new"]
     assert len(first) == 1
-
-
-async def test_resubscribe_deprecated(
-    connected_client: WebOsClient, fake_tv: FakeTv
-) -> None:
-    """Test resubscribe warns and replaces the subscription like subscribe."""
-    client = connected_client
-    fake_tv.responses[ep.GET_SERVICES] = {"services": [], "returnValue": True}
-    callback = AsyncMock()
-    await client.subscribe(callback, ep.GET_SERVICES)
-    first_uid = client._subscriptions[ep.GET_SERVICES]
-
-    with pytest.warns(DeprecationWarning, match="use subscribe"):
-        await client.resubscribe(callback, ep.GET_SERVICES)
-
-    assert client._subscriptions[ep.GET_SERVICES] != first_uid
-    assert first_uid not in client.callback_tasks
 
 
 async def test_subscribe_closed_before_first_update_processed(
@@ -2565,8 +2616,10 @@ async def test_multiple_subscribe_failures_retrieve_all_task_exceptions(
         lambda _loop, context: unhandled_exceptions.append(context)
     )
     try:
-        with pytest.raises(WebOsTvCommandTimeoutError):
+        with pytest.raises(WebOsTvConnectionError) as exc_info:
             await client.connect()
+        assert isinstance(exc_info.value.__cause__, WebOsTvCommandTimeoutError)
+        del exc_info
         await assert_disconnected(client)
         # connect_result holds the raised exception, whose traceback references
         # the subscribe tasks; drop it so unretrieved exceptions get collected.

@@ -124,6 +124,33 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+### Errors
+
+All errors derive from `WebOsTvError`:
+
+| Exception | Raised by | Meaning |
+|---|---|---|
+| `WebOsTvConnectionError` | `connect()` | Connecting failed, other than pairing: TV unreachable, timeout, invalid handshake, the TV closed the connection or a request failed while connecting. The original error is the cause. |
+| `WebOsTvRegistrationError` | `connect()` | A `WebOsTvConnectionError`: an already paired TV rejected the registration, e.g. while booting. The next connect usually succeeds. |
+| `WebOsTvPairError` | `connect()` | Pairing failed: the prompt was rejected or ignored, or the client key was revoked. Pair again. |
+| `WebOsTvCommandError` | Requests and commands | A request or command failed: not connected, the connection closed, a timeout or an error response. |
+| `WebOsTvServiceNotFoundError` | Requests and commands | A `WebOsTvCommandError`: the TV does not support the service or method. |
+| `WebOsTvWakeError` | `turn_on()` | Wake-on-LAN failed: no MAC address is known or the packets could not be sent. |
+
+```python
+try:
+    await client.connect()
+except WebOsTvPairError:
+    ...  # pair again
+except WebOsTvConnectionError:
+    ...  # TV is off or unreachable, try again later
+
+try:
+    await client.set_volume(10)
+except WebOsTvCommandError:
+    ...
+```
+
 ### Turning on the TV
 
 `turn_on()` sends Wake-on-LAN magic packets to the TV's wired and Wi-Fi MAC
