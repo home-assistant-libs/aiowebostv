@@ -197,16 +197,25 @@ class WebOsClient:
         return result.result()
 
     async def disconnect(self) -> None:
-        """Disconnect from webOS TV device."""
-        if self.connect_task is not None and not self.connect_task.done():
+        """Disconnect from webOS TV device.
+
+        If the caller is cancelled, it is cancelled without waiting for the
+        connection to finish closing, the closing continues in the background.
+        """
+        task = self.connect_task
+        if task is not None and not task.done():
             _LOGGER.debug("disconnect(%s): disconnecting", self.host)
-            self.connect_task.cancel()
-            try:
-                await self.connect_task
-            except asyncio.CancelledError:
-                _LOGGER.debug("disconnect(%s): connect task cancelled", self.host)
-                if self.connect_result is not None and not self.connect_result.done():
-                    self.connect_result.set_result(False)
+            task.cancel()
+            # Wait without awaiting the task, its CancelledError would be
+            # indistinguishable from the caller's own cancellation
+            await asyncio.wait({task})
+            if not task.cancelled():
+                # Raise an error from the connection, as awaiting the task did
+                task.result()
+                return
+            _LOGGER.debug("disconnect(%s): connect task cancelled", self.host)
+            if self.connect_result is not None and not self.connect_result.done():
+                self.connect_result.set_result(False)
             return
 
         _LOGGER.debug("disconnect(%s): already disconnected", self.host)

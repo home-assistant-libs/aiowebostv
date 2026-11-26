@@ -776,6 +776,49 @@ async def start_closing(
     return disconnect
 
 
+async def test_cancelled_disconnect_caller(
+    client: WebOsClient, fake_tv: FakeTv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test cancelling the disconnect caller raises CancelledError in it.
+
+    The connection keeps closing in the background.
+    """
+    monkeypatch.setattr(webos_client, "CLOSE_TIMEOUT", 0.2)
+    fake_tv.answer_close = False
+    assert await client.connect()
+
+    disconnect = await start_closing(client, fake_tv, "client")
+    assert disconnect is not None
+    disconnect.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await disconnect
+    assert disconnect.cancelled()
+
+    assert client.connect_task is not None
+    assert client.connect_task_active()
+    await asyncio.wait({client.connect_task}, timeout=1)
+    assert not client.connect_task_active()
+
+
+async def test_disconnect_while_tv_closes(
+    client: WebOsClient, fake_tv: FakeTv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test disconnect waits for a connection the TV is closing."""
+    monkeypatch.setattr(webos_client, "CLOSE_TIMEOUT", 0.2)
+    fake_tv.answer_close = False
+    assert await client.connect()
+    await start_closing(client, fake_tv, "tv")
+    task = client.connect_task
+    assert task is not None
+
+    await asyncio.wait_for(client.disconnect(), 1)
+
+    # The closing connection finishes instead of being cancelled
+    assert task.done()
+    assert not task.cancelled()
+
+
 @pytest.mark.parametrize("closed_by", ["client", "tv"])
 async def test_closing_connection_reports_not_connected(
     client: WebOsClient,
@@ -1174,16 +1217,19 @@ async def test_callback_awaiting_disconnect(
     """Test a state update callback awaiting disconnect() does not deadlock.
 
     The teardown waits for the callback, which waits for the teardown, until
-    the teardown gives up after the closeout timeout.
+    the teardown gives up after the closeout timeout and cancels the callback.
     """
     monkeypatch.setattr(webos_client, "CLOSEOUT_TIMEOUT", 0.1)
     client = connected_client
-    disconnected = asyncio.Event()
+    cancelled = asyncio.Event()
 
     async def disconnect_when_off(state: WebOsTvState) -> None:
         if not state.is_on:
-            await client.disconnect()
-            disconnected.set()
+            try:
+                await client.disconnect()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
 
     await client.register_state_update_callback(disconnect_when_off)
     assert fake_tv.main_ws is not None
@@ -1195,7 +1241,7 @@ async def test_callback_awaiting_disconnect(
 
     assert client.connect_task.done()
     assert not client.is_connected()
-    await asyncio.wait_for(disconnected.wait(), 1)
+    await asyncio.wait_for(cancelled.wait(), 1)
     assert "did not finish within 0.1s" in caplog.text
 
 
