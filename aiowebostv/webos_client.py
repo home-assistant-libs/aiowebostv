@@ -412,8 +412,15 @@ class WebOsClient:
             if not task.done():
                 task.cancel()
 
+        # Fail pending requests instead of cancelling them, the caller was not
+        # cancelled and would mistake a CancelledError for its own cancellation.
+        # Requests from the callback tasks were already cancelled with them.
         for future in self.futures.values():
-            future.cancel()
+            if not future.done():
+                future.set_exception(WebOsTvCommandError("Connection closed"))
+                # Mark it retrieved, a request that fails sending before it
+                # awaits the future would leave it never retrieved
+                future.exception()
 
     @staticmethod
     async def _close_websockets(*web_sockets: ClientWebSocketResponse | None) -> None:
