@@ -167,6 +167,12 @@ async def test_cancelled_connect_caller_then_connect_fails(
             await connect
 
         await assert_disconnected(client)
+        assert client.connect_result is not None
+        assert client.connect_result.done()
+
+        # Drop the result like a new connect attempt does, a never retrieved
+        # exception is logged when the future is garbage collected
+        client.connect_result = None
         gc.collect()
         await asyncio.sleep(0)
     finally:

@@ -84,6 +84,12 @@ def parse_mac_addresses(connection: dict[str, Any]) -> dict[str, str]:
     return macs
 
 
+def _retrieve_exception(future: Future) -> None:
+    """Mark the exception of a done future as retrieved."""
+    if not future.cancelled():
+        future.exception()
+
+
 class WebOsClient:
     """webOS TV client class."""
 
@@ -137,13 +143,27 @@ class WebOsClient:
 
         if self.connect_task_active() and self.connect_result is not None:
             _LOGGER.debug("connect(%s): connection already in progress", self.host)
-            return await asyncio.shield(self.connect_result)
+            return await self._wait_connect_result(self.connect_result)
 
         self.connect_result = self._loop.create_future()
+        # All callers may be cancelled before the attempt fails, mark the
+        # exception retrieved so it is not logged as never retrieved
+        self.connect_result.add_done_callback(_retrieve_exception)
         self.connect_task = asyncio.create_task(
             self.connect_handler(self.connect_result)
         )
-        return await asyncio.shield(self.connect_result)
+        return await self._wait_connect_result(self.connect_result)
+
+    @staticmethod
+    async def _wait_connect_result(result: Future[bool]) -> bool:
+        """Wait for the shared connect result.
+
+        Awaiting the future directly would cancel it when the caller is
+        cancelled. asyncio.wait() leaves it running, unlike asyncio.shield()
+        it does not report the exception when no caller is left waiting.
+        """
+        await asyncio.wait({result})
+        return result.result()
 
     async def disconnect(self) -> None:
         """Disconnect from webOS TV device."""
