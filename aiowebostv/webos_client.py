@@ -484,9 +484,15 @@ class WebOsClient:
             if not task.done():
                 task.cancel()
 
-        # Fail pending requests instead of cancelling them, the caller was not
-        # cancelled and would mistake a CancelledError for its own cancellation.
-        # Requests from the callback tasks were already cancelled with them.
+        # Requests from the callback tasks were already cancelled with them
+        self._fail_pending_requests()
+
+    def _fail_pending_requests(self) -> None:
+        """Fail the pending requests, the connection closed.
+
+        Fail them instead of cancelling them, the caller was not cancelled
+        and would mistake a CancelledError for its own cancellation.
+        """
         for future in self.futures.values():
             if not future.done():
                 future.set_exception(WebOsTvCommandError("Connection closed"))
@@ -662,18 +668,28 @@ class WebOsClient:
             future.set_result(msg)
 
     async def _rx_msgs_main_ws(self, web_socket: ClientWebSocketResponse) -> None:
-        """Receive messages from main websocket connection."""
-        async for raw_msg in web_socket:
-            _LOGGER.debug("recv(%s): %s", self.host, raw_msg)
-            if raw_msg.type is not WSMsgType.TEXT:
-                break
+        """Receive messages from main websocket connection.
 
-            # Log and keep receiving, an error escaping here would drop the
-            # connection without logging the cause
-            try:
-                self._process_text_message(raw_msg.data)
-            except Exception:
-                _LOGGER.exception("recv(%s): error processing message", self.host)
+        When the connection closes, reject new requests and fail the pending
+        ones, no response can arrive. While connecting, nothing waits for
+        this task, the requests would wait for their timeout.
+        """
+        try:
+            async for raw_msg in web_socket:
+                _LOGGER.debug("recv(%s): %s", self.host, raw_msg)
+                if raw_msg.type is not WSMsgType.TEXT:
+                    break
+
+                # Log and keep receiving, an error escaping here would drop the
+                # connection without logging the cause
+                try:
+                    self._process_text_message(raw_msg.data)
+                except Exception:
+                    _LOGGER.exception("recv(%s): error processing message", self.host)
+        finally:
+            if self.connection is web_socket:
+                self.connection = None
+            self._fail_pending_requests()
 
     async def _rx_msgs_input_ws(self, web_socket: ClientWebSocketResponse) -> None:
         """Receive messages from input websocket connection.
