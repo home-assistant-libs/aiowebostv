@@ -575,10 +575,13 @@ class WebOsClient:
         if self.created_client_session:
             closeout.add(asyncio.create_task(self.close_client_session()))
 
+        # Report the cleared state only if this connection reported state,
+        # a failed connect attempt leaves the reported state unchanged
+        state_reported = self.do_state_update
         self.do_state_update = False
         self.tv_state.clear()
 
-        if self.state_update_callbacks:
+        if state_reported and self.state_update_callbacks:
             closeout.add(asyncio.create_task(self._call_state_update_callbacks()))
 
         if not closeout:
