@@ -76,6 +76,8 @@ class FakeTv:
         self.hello_reply: str | None = None
         # "accept", "reject" or "no_key", used when the client key is not valid
         self.pairing = "accept"
+        # Seconds the user takes to answer the pairing prompt
+        self.pairing_delay = 0.0
         # Reject a signed manifest, like firmware with a blacklisted signature
         self.reject_signed = False
         # Reject every registration, like a TV that is still booting
@@ -201,6 +203,7 @@ class FakeTv:
         await ws.send_json(
             {"type": "response", "id": msg_id, "payload": {"pairingType": "PROMPT"}}
         )
+        await asyncio.sleep(self.pairing_delay)
         if self.pairing == "accept":
             await ws.send_json(
                 {
