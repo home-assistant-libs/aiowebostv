@@ -6,6 +6,7 @@ import copy
 import json
 import logging
 import socket
+import warnings
 from asyncio import Future, Task
 from asyncio.queues import Queue
 from collections.abc import Callable, Iterable
@@ -1074,8 +1075,12 @@ class WebOsClient:
     ) -> dict[str, Any]:
         """Subscribe to updates.
 
+        Replace an existing subscription to the uri, its handler would keep
+        receiving updates and could not be unsubscribed.
         Subscription use a fixed uid, pre-create a future and a handler.
         """
+        if uri in self._subscriptions:
+            await self.unsubscribe(uri)
         uid = self.command_count
         self.command_count += 1
         processed = await self.create_subscription_handler(uri, uid, callback)
@@ -1124,9 +1129,16 @@ class WebOsClient:
     async def resubscribe(
         self, callback: Callable, uri: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Resubscribe to updates by first unsubscribing and then subscribing."""
-        if uri in self._subscriptions:
-            await self.unsubscribe(uri)
+        """Resubscribe to updates.
+
+        Deprecated, use subscribe(), it replaces an existing subscription.
+        """
+        warnings.warn(
+            "resubscribe() is deprecated, use subscribe(), it replaces an "
+            "existing subscription",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return await self.subscribe(callback, uri, payload)
 
     async def input_command(self, message: str) -> None:
@@ -1510,7 +1522,7 @@ class WebOsClient:
 
     async def subscribe_current_channel(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to changes in the current tv channel."""
-        return await self.resubscribe(callback, ep.GET_CURRENT_CHANNEL)
+        return await self.subscribe(callback, ep.GET_CURRENT_CHANNEL)
 
     async def get_channel_info(self) -> dict[str, Any]:
         """Get the current channel info."""
@@ -1518,7 +1530,7 @@ class WebOsClient:
 
     async def subscribe_channel_info(self, callback: Callable) -> dict[str, Any]:
         """Subscribe to current channel info."""
-        return await self.resubscribe(callback, ep.GET_CHANNEL_INFO)
+        return await self.subscribe(callback, ep.GET_CHANNEL_INFO)
 
     async def set_channel(self, channel: str) -> dict[str, Any]:
         """Set the current channel."""
