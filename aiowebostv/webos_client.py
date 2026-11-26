@@ -32,7 +32,7 @@ from .handshake import REGISTRATION_MESSAGE
 from .models import WebOsTvInfo, WebOsTvState
 
 CONNECT_TIMEOUT = 2  # Timeout for connecting to the TV
-RECEIVE_TIMEOUT = 10  # Timeout for receiving messages using ws.receive_json
+RECEIVE_TIMEOUT = 10  # Timeout for receiving a handshake message
 REQUEST_TIMEOUT = 20  # Timeout for waiting for a response to a request
 CLOSE_TIMEOUT = 1  # Timeout for the websocket closing handshake
 # Timeout for tasks and state update callbacks to finish when closing
@@ -304,12 +304,41 @@ class WebOsClient:
             self.client_session = ClientSession()
             self.created_client_session = True
 
+    async def _receive_handshake_msg(
+        self, ws: ClientWebSocketResponse
+    ) -> dict[str, Any]:
+        """Receive a handshake message.
+
+        Raise WebOsTvCommandError if the connection closes or the message is
+        malformed, instead of a TypeError, ValueError or KeyError. A missing
+        or null payload is returned as an empty dict.
+        """
+        async with asyncio.timeout(RECEIVE_TIMEOUT):
+            msg = await ws.receive()
+        if msg.type is not WSMsgType.TEXT:
+            error = f"Connection closed during handshake: {msg.type.name} {msg.data}"
+            raise WebOsTvCommandError(error)
+        try:
+            response = json.loads(msg.data)
+        except ValueError as err:
+            error = f"Invalid handshake message {msg.data!r}"
+            raise WebOsTvCommandError(error) from err
+        if not isinstance(response, dict) or not isinstance(response.get("type"), str):
+            error = f"Invalid handshake message {response}"
+            raise WebOsTvCommandError(error)
+        payload = response.get("payload")
+        if payload is None:
+            response["payload"] = {}
+        elif not isinstance(payload, dict):
+            error = f"Invalid handshake message payload {response}"
+            raise WebOsTvCommandError(error)
+        return response
+
     async def _get_hello_info(self, ws: ClientWebSocketResponse) -> None:
         """Get hello info."""
         _LOGGER.debug("send(%s): hello", self.host)
         await ws.send_json({"id": "hello", "type": "hello", "payload": {}})
-        async with asyncio.timeout(RECEIVE_TIMEOUT):
-            response = await ws.receive_json()
+        response = await self._receive_handshake_msg(ws)
         _LOGGER.debug("recv(%s): %s", self.host, response)
 
         if response["type"] == "hello":
@@ -331,8 +360,7 @@ class WebOsClient:
         }
         _LOGGER.debug("send(%s): %s", self.host, request)
         await ws.send_json(request)
-        async with asyncio.timeout(RECEIVE_TIMEOUT):
-            response = await ws.receive_json()
+        response = await self._receive_handshake_msg(ws)
         _LOGGER.debug("recv(%s): %s", self.host, response)
 
         with suppress(WebOsTvResponseTypeError):
@@ -342,8 +370,7 @@ class WebOsClient:
         """Send the registration message and return the first response."""
         _LOGGER.debug("send(%s): registration", self.host)
         await ws.send_json(self.registration_msg())
-        async with asyncio.timeout(RECEIVE_TIMEOUT):
-            response = await ws.receive_json()
+        response = await self._receive_handshake_msg(ws)
         _LOGGER.debug("recv(%s): registration", self.host)
         return response
 
@@ -370,9 +397,9 @@ class WebOsClient:
 
         if (
             response["type"] == "response"
-            and response.get("payload", {}).get("pairingType") == "PROMPT"
+            and response["payload"].get("pairingType") == "PROMPT"
         ):
-            response = await ws.receive_json(timeout=RECEIVE_TIMEOUT)
+            response = await self._receive_handshake_msg(ws)
             _LOGGER.debug("recv(%s): pairing", self.host)
         _LOGGER.debug(
             "pairing(%s): type: %s, error: %s",
@@ -385,9 +412,7 @@ class WebOsClient:
         if response["type"] == "registered":
             # Keep the stored key if the TV sends no new one, so a
             # reconnect that works today keeps working.
-            self.client_key = (
-                response.get("payload", {}).get("client-key") or self.client_key
-            )
+            self.client_key = response["payload"].get("client-key") or self.client_key
         if not self.client_key:
             error = "Client key not set, pairing failed."
             raise WebOsTvPairError(error)

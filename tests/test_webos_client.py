@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import gc
+import json
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,16 @@ async def push_and_wait(
         await asyncio.wait_for(event.wait(), 1)
     finally:
         client.unregister_state_update_callback(on_state)
+
+
+def mock_ws(frames: list[dict[str, Any]]) -> AsyncMock:
+    """Return a websocket mock receiving the frames as text messages."""
+    ws = AsyncMock()
+    ws.receive.side_effect = [
+        aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(frame), None)
+        for frame in frames
+    ]
+    return ws
 
 
 async def assert_disconnected(client: WebOsClient) -> None:
@@ -242,8 +253,7 @@ async def test_check_registration_first_frame(
     frames: list[dict[str, Any]], client_key: str | None, error: str | None
 ) -> None:
     """Test _check_registration handles the first frame by type."""
-    ws = AsyncMock()
-    ws.receive_json.side_effect = frames
+    ws = mock_ws(frames)
     client = WebOsClient(HOST)
     # Skip the signed-manifest retry: that path is covered by the
     # registration tests, this test is about the frame-type dispatch.
@@ -260,8 +270,7 @@ async def test_check_registration_first_frame(
 
 async def test_check_registration_registered_without_key_keeps_stored_key() -> None:
     """Test a registered frame without a key keeps the stored key."""
-    ws = AsyncMock()
-    ws.receive_json.side_effect = [{"type": "registered", "payload": {}}]
+    ws = mock_ws([{"type": "registered", "payload": {}}])
     client = WebOsClient(HOST)
     client.client_key = "stored-key"
     client.signed_manifest = False
@@ -273,11 +282,12 @@ async def test_check_registration_registered_without_key_keeps_stored_key() -> N
 
 async def test_check_registration_both_manifests_rejected() -> None:
     """Test the second rejection raises the TV's own message."""
-    ws = AsyncMock()
-    ws.receive_json.side_effect = [
-        {"type": "error", "error": "403 Pairing rejected: signed manifest"},
-        {"type": "error", "error": "403 Pairing rejected: unsigned manifest"},
-    ]
+    ws = mock_ws(
+        [
+            {"type": "error", "error": "403 Pairing rejected: signed manifest"},
+            {"type": "error", "error": "403 Pairing rejected: unsigned manifest"},
+        ]
+    )
     client = WebOsClient(HOST)
 
     with pytest.raises(WebOsTvPairError, match="unsigned manifest"):
@@ -292,11 +302,12 @@ async def test_check_registration_error_with_stored_key(
     signed_manifest: bool,  # noqa: FBT001
 ) -> None:
     """Test a registration error on a paired TV is transient, not a pair error."""
-    ws = AsyncMock()
-    ws.receive_json.side_effect = [
-        {"type": "error", "error": BOOT_ERROR},
-        {"type": "error", "error": BOOT_ERROR},
-    ]
+    ws = mock_ws(
+        [
+            {"type": "error", "error": BOOT_ERROR},
+            {"type": "error", "error": BOOT_ERROR},
+        ]
+    )
     client = WebOsClient(HOST, CLIENT_KEY)
     client.signed_manifest = signed_manifest
 
@@ -309,11 +320,12 @@ async def test_check_registration_error_with_stored_key(
 
 async def test_check_registration_prompt_error_with_stored_key() -> None:
     """Test an error in the prompt step is a pair error, even with a stored key."""
-    ws = AsyncMock()
-    ws.receive_json.side_effect = [
-        {"type": "response", "payload": {"pairingType": "PROMPT"}},
-        {"type": "error", "error": "403 User denied access"},
-    ]
+    ws = mock_ws(
+        [
+            {"type": "response", "payload": {"pairingType": "PROMPT"}},
+            {"type": "error", "error": "403 User denied access"},
+        ]
+    )
     client = WebOsClient(HOST, "revoked-key")
 
     with pytest.raises(WebOsTvPairError, match="User denied access"):
@@ -441,6 +453,39 @@ async def test_invalid_hello_response(client: WebOsClient, fake_tv: FakeTv) -> N
         await client.connect()
 
     await assert_disconnected(client)
+
+
+@pytest.mark.parametrize(
+    ("hello_reply", "error"),
+    [
+        ("close", "Connection closed during handshake"),
+        ("not json", "Invalid handshake message"),
+        ("[1]", "Invalid handshake message"),
+        ('{"payload": {}}', "Invalid handshake message"),
+        ('{"type": "hello", "payload": [1]}', "Invalid handshake message payload"),
+    ],
+)
+async def test_malformed_handshake_message(
+    client: WebOsClient, fake_tv: FakeTv, hello_reply: str, error: str
+) -> None:
+    """Test a malformed handshake message or close raises a command error."""
+    fake_tv.hello_reply = hello_reply
+
+    with pytest.raises(WebOsTvCommandError, match=error):
+        await client.connect()
+
+    await assert_disconnected(client)
+
+
+async def test_check_registration_registered_null_payload() -> None:
+    """Test a registered frame with a null payload keeps the stored key."""
+    ws = mock_ws([{"type": "registered", "payload": None}])
+    client = WebOsClient(HOST, "stored-key")
+    client.signed_manifest = False
+
+    await client._check_registration(ws)
+
+    assert client.client_key == "stored-key"
 
 
 async def test_is_connected_during_failed_connect_closeout(
