@@ -1075,6 +1075,36 @@ async def test_message_processing_error_logged(
 # State updates
 
 
+async def test_failed_connect_does_not_call_callbacks(
+    client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test a failed connect does not call the state update callbacks.
+
+    It reported no state, a client retrying a TV that is off must not call
+    the callbacks on every attempt.
+    """
+    callback = AsyncMock()
+    await client.register_state_update_callback(callback)
+    fake_tv.hello_type = "error"
+
+    with pytest.raises(WebOsTvCommandError):
+        await client.connect()
+    await assert_disconnected(client)
+
+    callback.assert_not_awaited()
+
+    # A connection that reported state reports the cleared state on close
+    fake_tv.hello_type = "hello"
+    assert await client.connect()
+    callback.assert_awaited_with(client.tv_state)
+    callback.reset_mock()
+
+    await client.disconnect()
+
+    callback.assert_awaited_once()
+    assert not client.tv_state.is_on
+
+
 async def test_register_callback_when_connected(
     connected_client: WebOsClient,
 ) -> None:
