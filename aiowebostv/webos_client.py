@@ -34,6 +34,7 @@ from .models import WebOsTvInfo, WebOsTvState
 CONNECT_TIMEOUT = 2  # Timeout for connecting to the TV
 RECEIVE_TIMEOUT = 10  # Timeout for receiving messages using ws.receive_json
 REQUEST_TIMEOUT = 20  # Timeout for waiting for a response to a request
+CLOSE_TIMEOUT = 1  # Timeout for the websocket closing handshake
 
 HEARTBEAT = 5
 
@@ -414,12 +415,36 @@ class WebOsClient:
         for future in self.futures.values():
             future.cancel()
 
+    @staticmethod
+    async def _close_websockets(*web_sockets: ClientWebSocketResponse | None) -> None:
+        """Close websockets, abort the ones the TV does not close in time."""
+        close_tasks = {
+            asyncio.create_task(web_socket.close())
+            for web_socket in web_sockets
+            if web_socket is not None and not web_socket.closed
+        }
+        if not close_tasks:
+            return
+        _, pending = await asyncio.wait(close_tasks, timeout=CLOSE_TIMEOUT)
+        for task in pending:
+            task.cancel()  # aiohttp aborts the connection on cancel
+        if pending:
+            await asyncio.wait(pending)
+
     async def _closeout_tasks(
         self,
         main_ws: ClientWebSocketResponse | None,
         input_ws: ClientWebSocketResponse | None,
     ) -> None:
         """Cancel all tasks and close connections."""
+        # Close the websockets before cancelling the receive tasks, cancelling
+        # a pending receive() makes aiohttp drop the connection without waiting
+        # for the TV's CLOSE reply.
+        close_task = asyncio.create_task(self._close_websockets(main_ws, input_ws))
+        while not close_task.done():
+            with suppress(asyncio.CancelledError):
+                await asyncio.shield(close_task)
+
         closeout = set()
 
         self._cancel_tasks()
@@ -429,10 +454,6 @@ class WebOsClient:
 
         closeout.update(self._rx_tasks)
 
-        if main_ws is not None:
-            closeout.add(asyncio.create_task(main_ws.close()))
-        if input_ws is not None:
-            closeout.add(asyncio.create_task(input_ws.close()))
         if self.created_client_session:
             closeout.add(asyncio.create_task(self.close_client_session()))
 

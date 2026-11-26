@@ -544,6 +544,46 @@ async def test_disconnect(connected_client: WebOsClient) -> None:
     assert client.client_session is None
 
 
+async def test_disconnect_closes_websockets_gracefully(
+    connected_client: WebOsClient,
+) -> None:
+    """Test disconnect completes the closing handshake on both websockets."""
+    main_ws = connected_client.connection
+    input_ws = connected_client.input_connection
+    assert main_ws is not None
+    assert input_ws is not None
+
+    await connected_client.disconnect()
+
+    assert main_ws.close_code == aiohttp.WSCloseCode.OK
+    assert input_ws.close_code == aiohttp.WSCloseCode.OK
+
+
+async def test_disconnect_tv_does_not_answer_close(
+    client: WebOsClient, fake_tv: FakeTv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test disconnect aborts websockets the TV does not close in time."""
+    monkeypatch.setattr(webos_client, "CLOSE_TIMEOUT", 0.1)
+    fake_tv.answer_close = False
+    assert await client.connect()
+    main_ws = client.connection
+    input_ws = client.input_connection
+    assert main_ws is not None
+    assert input_ws is not None
+
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    await client.disconnect()
+
+    # Bounded by CLOSE_TIMEOUT, not the 10s aiohttp close timeout
+    assert loop.time() - start < 1
+    assert main_ws.closed
+    assert input_ws.closed
+    assert main_ws.close_code == aiohttp.WSCloseCode.ABNORMAL_CLOSURE
+    assert input_ws.close_code == aiohttp.WSCloseCode.ABNORMAL_CLOSURE
+    assert not client.is_connected()
+
+
 async def test_disconnect_when_not_connected(client: WebOsClient) -> None:
     """Test disconnecting a client that is not connected."""
     await client.disconnect()

@@ -78,6 +78,9 @@ class FakeTv:
         self.reject_signed = False
         # Reject every registration, like a TV that is still booting
         self.booting = False
+        # Answer the client's CLOSE, False never replies, like an unreachable TV
+        self.answer_close = True
+        self.release_close = asyncio.Event()
         # uri -> payload; None responds with a 404 error, missing uri never responds
         self.responses = default_responses()
         self.received: list[dict[str, Any]] = []
@@ -122,7 +125,7 @@ class FakeTv:
 
     async def _main_handler(self, request: web.Request) -> web.WebSocketResponse:
         """Handle the main websocket."""
-        ws = web.WebSocketResponse()
+        ws = web.WebSocketResponse(autoclose=self.answer_close)
         await ws.prepare(request)
         self.main_ws = ws
         async for msg in ws:
@@ -132,6 +135,7 @@ class FakeTv:
             self.received.append(data)
             self._message_received.set()
             await self._handle_message(ws, data)
+        await self._hold_close()
         return ws
 
     async def _handle_message(
@@ -241,14 +245,20 @@ class FakeTv:
 
     async def _input_handler(self, request: web.Request) -> web.WebSocketResponse:
         """Handle the input websocket."""
-        ws = web.WebSocketResponse()
+        ws = web.WebSocketResponse(autoclose=self.answer_close)
         await ws.prepare(request)
         self.input_ws = ws
         async for msg in ws:
             if msg.type is not WSMsgType.TEXT:
                 break
             self.input_received.put_nowait(msg.data)
+        await self._hold_close()
         return ws
+
+    async def _hold_close(self) -> None:
+        """Keep the connection open without a CLOSE reply, if configured."""
+        if not self.answer_close:
+            await self.release_close.wait()
 
 
 @pytest_asyncio.fixture
@@ -264,6 +274,7 @@ async def fake_tv(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[FakeTv]:
     # handshake and the client falls back to ws://
     monkeypatch.setattr(webos_client, "WSS_PORT", server.port)
     yield tv
+    tv.release_close.set()
     await server.close()
 
 
