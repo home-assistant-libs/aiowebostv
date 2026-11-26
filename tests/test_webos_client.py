@@ -639,6 +639,125 @@ async def test_disconnect_tv_does_not_answer_close(
     assert not client.is_connected()
 
 
+async def start_closing(
+    client: WebOsClient, fake_tv: FakeTv, closed_by: str
+) -> asyncio.Task[None] | None:
+    """Close a connection the TV holds open, return the disconnect task if any.
+
+    The TV does not answer the client's CLOSE, so the client stays closing
+    until the close timeout.
+    """
+    assert fake_tv.main_ws is not None
+    closing = asyncio.Event()
+    close_websockets = client._close_websockets
+
+    async def signal_and_close(*web_sockets: aiohttp.ClientWebSocketResponse) -> None:
+        closing.set()
+        await close_websockets(*web_sockets)
+
+    disconnect = None
+    with patch.object(client, "_close_websockets", signal_and_close):
+        if closed_by == "client":
+            disconnect = asyncio.create_task(client.disconnect())
+        else:
+            # The client answers the TV's CLOSE on the main websocket and
+            # holds on the input websocket the TV does not close
+            await asyncio.wait_for(fake_tv.main_ws.close(), 1)
+        await asyncio.wait_for(closing.wait(), 1)
+
+    assert client.connection is None
+    assert client.connect_task_active()
+    return disconnect
+
+
+@pytest.mark.parametrize("closed_by", ["client", "tv"])
+async def test_closing_connection_reports_not_connected(
+    client: WebOsClient,
+    fake_tv: FakeTv,
+    monkeypatch: pytest.MonkeyPatch,
+    closed_by: str,
+) -> None:
+    """Test a closing connection is not connected and rejects commands."""
+    monkeypatch.setattr(webos_client, "CLOSE_TIMEOUT", 0.2)
+    fake_tv.answer_close = False
+    assert await client.connect()
+
+    disconnect = await start_closing(client, fake_tv, closed_by)
+
+    assert not client.is_connected()
+    with pytest.raises(WebOsTvCommandError, match="Not connected"):
+        await client.get_services()
+    with pytest.raises(WebOsTvCommandError, match="Not connected"):
+        await client.button("HOME")
+
+    assert client.connect_task is not None
+    # Cancelled when the client disconnects, wait for it without its result
+    await asyncio.wait({client.connect_task}, timeout=1)
+    assert client.connect_task.done()
+    if disconnect is not None:
+        await disconnect
+
+
+@pytest.mark.parametrize("closed_by", ["client", "tv"])
+async def test_connect_while_closing_reconnects(
+    client: WebOsClient,
+    fake_tv: FakeTv,
+    monkeypatch: pytest.MonkeyPatch,
+    closed_by: str,
+) -> None:
+    """Test connecting while the connection closes waits and connects again.
+
+    Concurrent callers share the new connection attempt.
+    """
+    monkeypatch.setattr(webos_client, "CLOSE_TIMEOUT", 0.2)
+    fake_tv.answer_close = False
+    assert await client.connect()
+    old_task = client.connect_task
+
+    disconnect = await start_closing(client, fake_tv, closed_by)
+    fake_tv.answer_close = True
+
+    connects = asyncio.gather(client.connect(), client.connect())
+    assert await asyncio.wait_for(connects, 2) == [True, True]
+    if disconnect is not None:
+        await disconnect
+
+    assert client.connect_task is not old_task
+    assert client.is_connected()
+    assert [msg["type"] for msg in fake_tv.received].count("hello") == 2
+
+
+@pytest.mark.parametrize(
+    ("connection", "send", "method"),
+    [
+        ("connection", "send_json", "get_services"),
+        ("input_connection", "send_str", "click"),
+    ],
+)
+@pytest.mark.parametrize(
+    "error",
+    [
+        aiohttp.ClientConnectionResetError("Cannot write to closing transport"),
+        ConnectionResetError("Connection lost"),
+    ],
+)
+async def test_send_error_raises_command_error(
+    connected_client: WebOsClient,
+    connection: str,
+    send: str,
+    method: str,
+    error: Exception,
+) -> None:
+    """Test a send failing on a connection the TV closed raises a command error."""
+    with (
+        patch.object(getattr(connected_client, connection), send, side_effect=error),
+        pytest.raises(WebOsTvCommandError, match="Failed to send") as exc_info,
+    ):
+        await getattr(connected_client, method)()
+
+    assert exc_info.value.__cause__ is error
+
+
 async def test_disconnect_when_not_connected(client: WebOsClient) -> None:
     """Test disconnecting a client that is not connected."""
     await client.disconnect()
@@ -742,7 +861,7 @@ async def test_request_failing_to_send_on_close(
             request = asyncio.create_task(connected_client.get_services())
             await sending.wait()
             await connected_client.disconnect()
-            with pytest.raises(ConnectionResetError):
+            with pytest.raises(WebOsTvCommandError, match="Failed to send"):
                 await request
         # The request traceback references the future, release it so a never
         # retrieved exception is logged when the future is garbage collected

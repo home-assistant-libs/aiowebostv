@@ -136,14 +136,28 @@ class WebOsClient:
         Cancelling a caller does not stop the connection attempt, it is shared
         by all callers and keeps running in the background. Use `disconnect()`
         to stop it.
-        """
-        if self.is_connected():
-            _LOGGER.debug("connect(%s): already connected", self.host)
-            return True
 
-        if self.connect_task_active() and self.connect_result is not None:
-            _LOGGER.debug("connect(%s): connection already in progress", self.host)
-            return await self._wait_connect_result(self.connect_result)
+        If the previous connection is still closing, wait for it to close and
+        connect again.
+        """
+        while True:
+            if self.is_connected():
+                _LOGGER.debug("connect(%s): already connected", self.host)
+                return True
+
+            task = self.connect_task
+            if task is None or task.done() or self.connect_result is None:
+                break
+
+            if not self.connect_result.done():
+                _LOGGER.debug("connect(%s): connection already in progress", self.host)
+                return await self._wait_connect_result(self.connect_result)
+
+            # The connect task outlives its result while the connection
+            # closes, wait for it and check again, a concurrent caller may
+            # have started the next connection attempt meanwhile.
+            _LOGGER.debug("connect(%s): waiting for connection to close", self.host)
+            await asyncio.wait({task})
 
         self.connect_result = self._loop.create_future()
         # All callers may be cancelled before the attempt fails, mark the
@@ -199,9 +213,15 @@ class WebOsClient:
         return self.connect_task is not None and not self.connect_task.done()
 
     def is_connected(self) -> bool:
-        """Return true if connected to the tv."""
+        """Return true if connected to the tv.
+
+        False while the connection closes, the connect task is still active
+        then and the connect result still reports the connection it made.
+        """
         return (
-            self.connect_task_active()
+            self.connection is not None
+            and not self.connection.closed
+            and self.connect_task_active()
             and self.connect_result is not None
             and self.connect_result.done()
             and self.connect_result.exception() is None
@@ -469,6 +489,10 @@ class WebOsClient:
         input_ws: ClientWebSocketResponse | None,
     ) -> None:
         """Cancel all tasks and close connections."""
+        # Report not connected and reject new commands while closing
+        self.connection = None
+        self.input_connection = None
+
         # Close the websockets before cancelling the receive tasks, cancelling
         # a pending receive() makes aiohttp drop the connection without waiting
         # for the TV's CLOSE reply.
@@ -489,8 +513,6 @@ class WebOsClient:
         if self.created_client_session:
             closeout.add(asyncio.create_task(self.close_client_session()))
 
-        self.connection = None
-        self.input_connection = None
         self.do_state_update = False
         self.tv_state.clear()
 
@@ -831,7 +853,12 @@ class WebOsClient:
             raise WebOsTvCommandError(error)
 
         _LOGGER.debug("send(%s): %s", self.host, message)
-        await self.connection.send_json(message)
+        try:
+            await self.connection.send_json(message)
+        except (aiohttp.ClientError, ConnectionError) as err:
+            # The TV closed the connection, it is not closed out yet
+            error = f"Failed to send command: {err}"
+            raise WebOsTvCommandError(error) from err
 
     async def request(
         self,
@@ -968,7 +995,12 @@ class WebOsClient:
             raise WebOsTvCommandError(error)
 
         _LOGGER.debug("send(%s): %s", self.host, message)
-        await self.input_connection.send_str(message)
+        try:
+            await self.input_connection.send_str(message)
+        except (aiohttp.ClientError, ConnectionError) as err:
+            # The TV closed the connection, it is not closed out yet
+            error = f"Failed to send input command: {err}"
+            raise WebOsTvCommandError(error) from err
 
     # high level request handling
 
