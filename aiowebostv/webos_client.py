@@ -1001,8 +1001,6 @@ class WebOsClient:
         except TimeoutError as err:
             error = f"Response timed out for {uri} with uid {uid}"
             raise WebOsTvCommandTimeoutError(error) from err
-        except (asyncio.CancelledError, WebOsTvCommandError):
-            raise
         finally:
             del self.futures[uid]
 
