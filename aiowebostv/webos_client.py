@@ -33,6 +33,9 @@ from .models import WebOsTvInfo, WebOsTvState
 
 CONNECT_TIMEOUT = 2  # Timeout for connecting to the TV
 RECEIVE_TIMEOUT = 10  # Timeout for receiving a handshake message
+# Timeout for the user to answer the pairing prompt, above the 120s after
+# which the TV cancels the prompt and replies with an error
+PAIRING_TIMEOUT = 130
 REQUEST_TIMEOUT = 20  # Timeout for waiting for a response to a request
 CLOSE_TIMEOUT = 1  # Timeout for the websocket closing handshake
 # Timeout for tasks and state update callbacks to finish when closing
@@ -313,8 +316,7 @@ class WebOsClient:
         malformed, instead of a TypeError, ValueError or KeyError. A missing
         or null payload is returned as an empty dict.
         """
-        async with asyncio.timeout(RECEIVE_TIMEOUT):
-            msg = await ws.receive()
+        msg = await ws.receive()
         if msg.type is not WSMsgType.TEXT:
             error = f"Connection closed during handshake: {msg.type.name} {msg.data}"
             raise WebOsTvCommandError(error)
@@ -338,7 +340,8 @@ class WebOsClient:
         """Get hello info."""
         _LOGGER.debug("send(%s): hello", self.host)
         await ws.send_json({"id": "hello", "type": "hello", "payload": {}})
-        response = await self._receive_handshake_msg(ws)
+        async with asyncio.timeout(RECEIVE_TIMEOUT):
+            response = await self._receive_handshake_msg(ws)
         _LOGGER.debug("recv(%s): %s", self.host, response)
 
         if response["type"] == "hello":
@@ -360,7 +363,8 @@ class WebOsClient:
         }
         _LOGGER.debug("send(%s): %s", self.host, request)
         await ws.send_json(request)
-        response = await self._receive_handshake_msg(ws)
+        async with asyncio.timeout(RECEIVE_TIMEOUT):
+            response = await self._receive_handshake_msg(ws)
         _LOGGER.debug("recv(%s): %s", self.host, response)
 
         with suppress(WebOsTvResponseTypeError):
@@ -370,7 +374,8 @@ class WebOsClient:
         """Send the registration message and return the first response."""
         _LOGGER.debug("send(%s): registration", self.host)
         await ws.send_json(self.registration_msg())
-        response = await self._receive_handshake_msg(ws)
+        async with asyncio.timeout(RECEIVE_TIMEOUT):
+            response = await self._receive_handshake_msg(ws)
         _LOGGER.debug("recv(%s): registration", self.host)
         return response
 
@@ -399,7 +404,9 @@ class WebOsClient:
             response["type"] == "response"
             and response["payload"].get("pairingType") == "PROMPT"
         ):
-            response = await self._receive_handshake_msg(ws)
+            # The user answers the prompt on the TV
+            async with asyncio.timeout(PAIRING_TIMEOUT):
+                response = await self._receive_handshake_msg(ws)
             _LOGGER.debug("recv(%s): pairing", self.host)
         _LOGGER.debug(
             "pairing(%s): type: %s, error: %s",

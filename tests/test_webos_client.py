@@ -206,6 +206,41 @@ async def test_pairing() -> None:
     assert client.client_key == NEW_CLIENT_KEY
 
 
+async def test_pairing_slower_than_receive_timeout(
+    fake_tv: FakeTv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test the user gets longer than the receive timeout to accept pairing."""
+    monkeypatch.setattr(webos_client, "RECEIVE_TIMEOUT", 0.05)
+    fake_tv.pairing_delay = 0.2
+    client = WebOsClient(HOST)
+
+    try:
+        assert await client.connect()
+    finally:
+        await client.disconnect()
+
+    assert client.client_key == NEW_CLIENT_KEY
+
+
+async def test_pairing_timeout(
+    fake_tv: FakeTv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test the pairing prompt wait is bounded when the TV does not answer."""
+    monkeypatch.setattr(webos_client, "PAIRING_TIMEOUT", 0.1)
+    fake_tv.pairing_delay = 5
+    client = WebOsClient(HOST)
+
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    with pytest.raises(TimeoutError):
+        await client.connect()
+
+    # The pairing timeout, not the receive timeout or the TV's answer
+    assert loop.time() - start < 1
+    await assert_disconnected(client)
+    assert client.client_key is None
+
+
 @pytest.mark.parametrize("pairing", ["reject", "no_key"])
 async def test_pairing_failed(fake_tv: FakeTv, pairing: str) -> None:
     """Test pairing failures raise a pair error."""
