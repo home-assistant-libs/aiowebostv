@@ -1375,6 +1375,96 @@ async def test_live_tv_channel_subscriptions(
     ]
 
 
+async def test_leaving_live_tv_unsubscribes_channel(
+    connected_client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test leaving Live TV unsubscribes the current channel and info.
+
+    A channel update the TV sends after leaving Live TV must not set a stale
+    channel.
+    """
+    with patch("aiowebostv.webos_client.asyncio.sleep"):
+        await push_and_wait(
+            connected_client,
+            fake_tv,
+            ep.GET_CURRENT_APP_INFO,
+            {"appId": "com.webos.app.livetv"},
+            lambda state: state.channel_info is not None,
+        )
+    await push_and_wait(
+        connected_client,
+        fake_tv,
+        ep.GET_CURRENT_APP_INFO,
+        {"appId": "com.webos.app.hdmi1"},
+        lambda state: state.current_channel is None and state.channel_info is None,
+    )
+
+    assert ep.GET_CURRENT_CHANNEL not in connected_client._subscriptions
+    assert ep.GET_CHANNEL_INFO not in connected_client._subscriptions
+
+    # A late update on the old subscription is ignored, the mute update after
+    # it signals that both were handled
+    await fake_tv.push(ep.GET_CURRENT_CHANNEL, {"channelId": "2"})
+    await push_and_wait(
+        connected_client,
+        fake_tv,
+        ep.GET_AUDIO_STATUS,
+        {"mute": True},
+        lambda state: state.muted is True,
+    )
+
+    assert connected_client.tv_state.current_channel is None
+    assert connected_client.tv_state.channel_info is None
+
+
+async def test_repeated_live_tv_update_keeps_channel(
+    client: WebOsClient, fake_tv: FakeTv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test a repeated Live TV app update keeps the channel subscriptions."""
+    handled: asyncio.Queue[str] = asyncio.Queue()
+    set_current_app_state = client.set_current_app_state
+
+    async def signal_set_current_app_state(app_id: str) -> None:
+        await set_current_app_state(app_id)
+        handled.put_nowait(app_id)
+
+    monkeypatch.setattr(client, "set_current_app_state", signal_set_current_app_state)
+    assert await client.connect()
+    assert await asyncio.wait_for(handled.get(), 1) == "com.webos.app.hdmi1"
+
+    with patch("aiowebostv.webos_client.asyncio.sleep"):
+        for _ in range(2):
+            await fake_tv.push(
+                ep.GET_CURRENT_APP_INFO, {"appId": "com.webos.app.livetv"}
+            )
+            assert await asyncio.wait_for(handled.get(), 1) == "com.webos.app.livetv"
+            assert client.tv_state.current_channel is not None
+            assert client.tv_state.channel_info is not None
+
+    assert not any(msg["type"] == "unsubscribe" for msg in fake_tv.received)
+
+
+async def test_unsubscribe_send_failure_deletes_handler(
+    connected_client: WebOsClient,
+) -> None:
+    """Test unsubscribe deletes the handler when the command fails to send."""
+    assert ep.GET_POWER_STATE in connected_client._subscriptions
+    uid = connected_client._subscriptions[ep.GET_POWER_STATE]
+
+    with (
+        patch.object(
+            connected_client,
+            "command",
+            side_effect=WebOsTvCommandError("Failed to send command"),
+        ),
+        pytest.raises(WebOsTvCommandError),
+    ):
+        await connected_client.unsubscribe(ep.GET_POWER_STATE)
+
+    assert ep.GET_POWER_STATE not in connected_client._subscriptions
+    assert uid not in connected_client.callback_tasks
+
+
 CHANNEL_ERROR = {
     "returnValue": False,
     "errorText": "broadcastId = 00000047 is already closed",
@@ -1437,6 +1527,18 @@ async def test_current_channel_error_update(
         CHANNEL_ERROR,
         lambda state: state.current_channel is None,
     )
+
+    # The next Live TV update replaces the failed subscription
+    with patch("aiowebostv.webos_client.asyncio.sleep"):
+        await push_and_wait(
+            connected_client,
+            fake_tv,
+            ep.GET_CURRENT_APP_INFO,
+            {"appId": "com.webos.app.livetv"},
+            lambda state: state.current_channel is not None,
+        )
+
+    await fake_tv.wait_for_message("unsubscribe", ep.GET_CURRENT_CHANNEL)
 
 
 # Requests

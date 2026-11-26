@@ -742,19 +742,29 @@ class WebOsClient:
             with suppress(WebOsTvCommandError):
                 await self.subscribe_channels(self.set_channels_state)
 
-        if (
-            self.tv_state.channels
-            and app_id == "com.webos.app.livetv"
-            and self.tv_state.current_channel is None
-        ):
-            await asyncio.sleep(2)
-            with suppress(WebOsTvCommandError):
-                await self.subscribe_current_channel(self.set_current_channel_state)
+        if self.tv_state.channels and app_id == "com.webos.app.livetv":
+            if self.tv_state.current_channel is None:
+                await asyncio.sleep(2)
+                with suppress(WebOsTvCommandError):
+                    await self.subscribe_current_channel(self.set_current_channel_state)
         else:
+            await self._unsubscribe_channel()
             self.tv_state.current_channel = None
             self.tv_state.channel_info = None
 
         await self.do_state_update_callbacks()
+
+    async def _unsubscribe_channel(self) -> None:
+        """Unsubscribe from the current channel and channel info.
+
+        Both are only valid on Live TV, an update after leaving it would set
+        a stale channel. Unsubscribe the current channel first, its callback
+        may be subscribing to the channel info.
+        """
+        for uri in (ep.GET_CURRENT_CHANNEL, ep.GET_CHANNEL_INFO):
+            if uri in self._subscriptions:
+                with suppress(WebOsTvCommandError):
+                    await self.unsubscribe(uri)
 
     async def set_muted_state(self, muted: bool) -> None:  # noqa: FBT001
         """Set TV mute state callback."""
@@ -1014,12 +1024,15 @@ class WebOsClient:
     async def unsubscribe(self, uri: str) -> None:
         """Unsubscribe from updates by uri.
 
-        Send unsubscribe command and delete the subscription handler.
+        Send unsubscribe command and delete the subscription handler, also
+        when the command fails to send, the connection is closing then.
         uri is ignored by the TV, it is sent for debugging purposes.
         """
         uid = self._subscriptions[uri]
-        await self.command("unsubscribe", uri, uid=uid)
-        await self.delete_subscription_handler(uri)
+        try:
+            await self.command("unsubscribe", uri, uid=uid)
+        finally:
+            await self.delete_subscription_handler(uri)
 
     async def resubscribe(
         self, callback: Callable, uri: str, payload: dict[str, Any] | None = None
