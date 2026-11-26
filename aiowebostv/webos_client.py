@@ -611,9 +611,22 @@ class WebOsClient:
                     processed.set_result(None)
 
     def _process_text_message(self, data: str) -> None:
-        """Process text message."""
-        msg = json.loads(data)
+        """Process text message.
+
+        Skip a malformed message, it must not drop the connection.
+        """
+        try:
+            msg = json.loads(data)
+        except ValueError:
+            _LOGGER.warning("recv(%s): ignoring invalid JSON message", self.host)
+            return
+        if not isinstance(msg, dict):
+            _LOGGER.warning("recv(%s): ignoring non-object message", self.host)
+            return
         uid = msg.get("id")
+        if not isinstance(uid, int | str | None):
+            _LOGGER.warning("recv(%s): ignoring message with id %r", self.host, uid)
+            return
         # if we have a callback for this message, put it in the queue
         if queue := self.callback_queues.get(uid):
             queue.put_nowait(msg)
@@ -630,7 +643,12 @@ class WebOsClient:
             if raw_msg.type is not WSMsgType.TEXT:
                 break
 
-            self._process_text_message(raw_msg.data)
+            # Log and keep receiving, an error escaping here would drop the
+            # connection without logging the cause
+            try:
+                self._process_text_message(raw_msg.data)
+            except Exception:
+                _LOGGER.exception("recv(%s): error processing message", self.host)
 
     async def _rx_msgs_input_ws(self, web_socket: ClientWebSocketResponse) -> None:
         """Receive messages from input websocket connection.

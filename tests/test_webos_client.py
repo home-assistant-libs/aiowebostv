@@ -903,6 +903,69 @@ async def test_optional_info_not_available(
     assert client.tv_state.sound_output is None
 
 
+@pytest.mark.parametrize(
+    ("message", "log"),
+    [
+        ("not json", "invalid JSON message"),
+        ("[1, 2]", "non-object message"),
+        ('{"id": [1], "type": "response"}', "message with id [1]"),
+    ],
+)
+async def test_malformed_message_ignored(
+    connected_client: WebOsClient,
+    fake_tv: FakeTv,
+    caplog: pytest.LogCaptureFixture,
+    message: str,
+    log: str,
+) -> None:
+    """Test a malformed message is logged and does not drop the connection."""
+    assert fake_tv.main_ws is not None
+    await fake_tv.main_ws.send_str(message)
+
+    await push_and_wait(
+        connected_client,
+        fake_tv,
+        ep.GET_AUDIO_STATUS,
+        {"mute": True},
+        lambda state: state.muted is True,
+    )
+
+    assert connected_client.is_connected()
+    assert log in caplog.text
+
+
+async def test_message_processing_error_logged(
+    connected_client: WebOsClient,
+    fake_tv: FakeTv,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test an error processing a message is logged and keeps the connection."""
+    process_text_message = connected_client._process_text_message
+    calls = 0
+
+    def fail_first(data: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            msg = "boom"
+            raise RuntimeError(msg)
+        process_text_message(data)
+
+    with patch.object(connected_client, "_process_text_message", fail_first):
+        await fake_tv.push(ep.GET_AUDIO_STATUS, {"mute": True})
+        await push_and_wait(
+            connected_client,
+            fake_tv,
+            ep.GET_AUDIO_STATUS,
+            {"mute": False},
+            lambda state: state.muted is False and calls == 2,
+        )
+
+    assert connected_client.is_connected()
+    assert "error processing message" in caplog.text
+    assert "RuntimeError: boom" in caplog.text
+
+
 # State updates
 
 
