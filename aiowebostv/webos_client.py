@@ -511,18 +511,33 @@ class WebOsClient:
         finally:
             await self._closeout_tasks(main_ws, input_ws)
 
-    @staticmethod
     async def callback_handler(
+        self,
         queue: Queue[dict[str, Any]],
         callback: Callable,
         future: Future[dict[str, Any]],
     ) -> None:
-        """Handle callbacks."""
+        """Handle callbacks.
+
+        Error messages are not passed to the callback, they carry no state.
+        A failing callback is logged and must not stop the handler, the
+        subscription would stop updating and the first message would never
+        resolve the future, leaving the subscribe request waiting for its
+        timeout. The first message always resolves the future, so the
+        subscribe request can raise for an error response.
+        """
         with suppress(asyncio.CancelledError):
             while True:
                 msg = await queue.get()
-                payload = msg.get("payload")
-                await callback(payload)
+                if msg.get("type") == "error":
+                    _LOGGER.debug("subscription(%s): error %s", self.host, msg)
+                else:
+                    try:
+                        await callback(msg.get("payload"))
+                    except Exception:
+                        _LOGGER.exception(
+                            "subscription callback(%s): error for %s", self.host, msg
+                        )
                 if not future.done():
                     future.set_result(msg)
 

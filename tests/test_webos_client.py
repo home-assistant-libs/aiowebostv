@@ -890,6 +890,87 @@ async def test_apps_updates(connected_client: WebOsClient, fake_tv: FakeTv) -> N
     assert list(connected_client.tv_state.apps) == ["youtube"]
 
 
+@pytest.mark.parametrize(
+    ("uri", "attribute", "expected"),
+    [
+        (ep.GET_POWER_STATE, "power_state", {}),
+        (ep.GET_CURRENT_APP_INFO, "current_app_id", None),
+        (ep.GET_AUDIO_STATUS, "muted", None),
+        (ep.GET_VOLUME, "volume_status", {}),
+        (ep.GET_APPS, "apps", {}),
+        (ep.GET_INPUTS, "inputs", {}),
+        (ep.GET_SOUND_OUTPUT, "sound_output", None),
+        (ep.GET_MEDIA_FOREGROUND_APP_INFO, "media_state", []),
+    ],
+)
+async def test_subscription_not_found_at_connect(
+    client: WebOsClient,
+    fake_tv: FakeTv,
+    monkeypatch: pytest.MonkeyPatch,
+    uri: str,
+    attribute: str,
+    expected: object,
+) -> None:
+    """Test a state subscription the TV does not support does not fail connect.
+
+    The error is not passed to the callback, a subscription callback that
+    failed on it would leave the subscribe request waiting for its timeout.
+    """
+    monkeypatch.setattr(webos_client, "REQUEST_TIMEOUT", 1)
+    fake_tv.responses[uri] = None
+
+    async with asyncio.timeout(0.5):
+        assert await client.connect()
+
+    assert getattr(client.tv_state, attribute) == expected
+
+
+async def test_subscription_error_update_ignored(
+    connected_client: WebOsClient, fake_tv: FakeTv
+) -> None:
+    """Test an error message on a subscription does not change the state."""
+    assert fake_tv.main_ws is not None
+    await fake_tv.main_ws.send_json(
+        {
+            "type": "error",
+            "id": fake_tv.subscriptions[ep.GET_INPUTS],
+            "error": "500 Application error",
+            "payload": {},
+        }
+    )
+    await push_and_wait(
+        connected_client,
+        fake_tv,
+        ep.GET_INPUTS,
+        {"devices": [{"appId": "hdmi2"}]},
+        lambda state: "hdmi2" in state.inputs,
+    )
+
+    assert list(connected_client.tv_state.inputs) == ["hdmi2"]
+
+
+async def test_failing_subscription_callback_keeps_handling_updates(
+    connected_client: WebOsClient,
+    fake_tv: FakeTv,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test a failing subscription callback is logged and updates continue."""
+    uid = fake_tv.subscriptions[ep.GET_APPS]
+    # Removing an unknown app fails in set_apps_state
+    await fake_tv.push(ep.GET_APPS, {"change": "removed", "id": "unknown"})
+    await push_and_wait(
+        connected_client,
+        fake_tv,
+        ep.GET_APPS,
+        {"change": "added", "id": "youtube", "title": "YouTube"},
+        lambda state: "youtube" in state.apps,
+    )
+
+    assert not connected_client.callback_tasks[uid].done()
+    assert "subscription callback" in caplog.text
+    assert "KeyError: 'unknown'" in caplog.text
+
+
 async def test_live_tv_channel_subscriptions(
     connected_client: WebOsClient, fake_tv: FakeTv
 ) -> None:
