@@ -126,6 +126,61 @@ async def test_concurrent_connect(client: WebOsClient, fake_tv: FakeTv) -> None:
     assert [msg["type"] for msg in fake_tv.received].count("hello") == 1
 
 
+async def test_cancelled_connect_caller(client: WebOsClient, fake_tv: FakeTv) -> None:
+    """Test cancelling a connect caller does not cancel the shared attempt."""
+    fake_tv.responses.pop(ep.GET_POWER_STATE)
+    cancelled = asyncio.create_task(client.connect())
+    waiting = asyncio.create_task(client.connect())
+    await fake_tv.wait_for_message("subscribe", ep.GET_POWER_STATE)
+
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+
+    assert client.connect_result is not None
+    assert not client.connect_result.cancelled()
+    assert not client.is_connected()
+
+    await fake_tv.push(ep.GET_POWER_STATE, {"state": "Active"})
+    assert await waiting
+    assert client.is_connected()
+
+
+async def test_cancelled_connect_caller_then_connect_fails(
+    client: WebOsClient, fake_tv: FakeTv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test a failed connect nobody waits for anymore does not log an error."""
+    monkeypatch.setattr(webos_client, "REQUEST_TIMEOUT", 0.05)
+    fake_tv.responses.pop(ep.GET_POWER_STATE)
+
+    unhandled_exceptions: list[dict[str, Any]] = []
+    loop = asyncio.get_running_loop()
+    orig_handler = loop.get_exception_handler()
+    loop.set_exception_handler(
+        lambda _loop, context: unhandled_exceptions.append(context)
+    )
+    try:
+        connect = asyncio.create_task(client.connect())
+        await fake_tv.wait_for_message("subscribe", ep.GET_POWER_STATE)
+        connect.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await connect
+
+        await assert_disconnected(client)
+        assert client.connect_result is not None
+        assert client.connect_result.done()
+
+        # Drop the result like a new connect attempt does, a never retrieved
+        # exception is logged when the future is garbage collected
+        client.connect_result = None
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(orig_handler)
+
+    assert unhandled_exceptions == []
+
+
 @pytest.mark.usefixtures("fake_tv")
 async def test_pairing() -> None:
     """Test pairing a client without a client key."""
