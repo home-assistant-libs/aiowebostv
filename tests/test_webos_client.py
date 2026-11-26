@@ -1159,6 +1159,37 @@ async def test_register_callback_when_connected(
     callback.assert_awaited_once_with(connected_client.tv_state)
 
 
+async def test_register_failing_callback_when_connected(
+    connected_client: WebOsClient,
+    fake_tv: FakeTv,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test an error from the initial callback call is logged, not raised."""
+    calls = 0
+
+    async def failing_callback(_state: WebOsTvState) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            msg = "boom"
+            raise RuntimeError(msg)
+
+    await connected_client.register_state_update_callback(failing_callback)
+
+    assert "state update callback" in caplog.text
+    assert "RuntimeError: boom" in caplog.text
+
+    # Still registered, it receives the next update
+    await push_and_wait(
+        connected_client,
+        fake_tv,
+        ep.GET_AUDIO_STATUS,
+        {"mute": True},
+        lambda state: state.muted is True,
+    )
+    assert calls == 2
+
+
 async def test_unregister_and_clear_callbacks(client: WebOsClient) -> None:
     """Test unregistering and clearing state update callbacks."""
     callback1 = AsyncMock()

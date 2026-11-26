@@ -745,10 +745,17 @@ class WebOsClient:
         teardown gives up after `CLOSEOUT_TIMEOUT` and cancels the callback.
         To disconnect in response to a state change, schedule it as a
         separate task instead, e.g. `asyncio.create_task(client.disconnect())`.
+
+        If connected, the callback is called with the current state. An error
+        it raises is logged, like for the state updates, the callback stays
+        registered.
         """
         self.state_update_callbacks.append(callback)
         if self.do_state_update:
-            await callback(self.tv_state)
+            try:
+                await callback(self.tv_state)
+            except Exception:
+                _LOGGER.exception("state update callback(%s): error", self.host)
 
     def set_volume_step_delay(self, step_delay_ms: float | None) -> None:
         """Set volume step delay in ms or None to disable step delay."""
