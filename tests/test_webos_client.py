@@ -504,6 +504,30 @@ async def test_is_connected_during_failed_connect_closeout(
     await assert_disconnected(client)
 
 
+@pytest.mark.parametrize(
+    ("msg_type", "uri"),
+    [("request", ep.GET_SOFTWARE_INFO), ("subscribe", ep.GET_POWER_STATE)],
+)
+async def test_tv_closes_during_connect(
+    client: WebOsClient, fake_tv: FakeTv, msg_type: str, uri: str
+) -> None:
+    """Test the TV closing while connecting fails connect without a timeout.
+
+    Nothing waits for the receive task while connecting, the pending request
+    must fail when it ends instead of after the request timeout.
+    """
+    del fake_tv.responses[uri]
+    connect = asyncio.create_task(client.connect())
+    await fake_tv.wait_for_message(msg_type, uri)
+
+    assert fake_tv.main_ws is not None
+    await fake_tv.main_ws.close()
+
+    with pytest.raises(WebOsTvCommandError, match="Connection closed"):
+        await asyncio.wait_for(connect, 1)
+    await assert_disconnected(client)
+
+
 async def test_connect_timeout(
     client: WebOsClient, fake_tv: FakeTv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
