@@ -35,6 +35,8 @@ CONNECT_TIMEOUT = 2  # Timeout for connecting to the TV
 RECEIVE_TIMEOUT = 10  # Timeout for receiving messages using ws.receive_json
 REQUEST_TIMEOUT = 20  # Timeout for waiting for a response to a request
 CLOSE_TIMEOUT = 1  # Timeout for the websocket closing handshake
+# Timeout for tasks and state update callbacks to finish when closing
+CLOSEOUT_TIMEOUT = 5
 
 HEARTBEAT = 5
 
@@ -522,10 +524,24 @@ class WebOsClient:
         if not closeout:
             return
 
-        closeout_task = asyncio.create_task(asyncio.wait(closeout))
+        # Bounded, a task or state update callback that does not finish
+        # (e.g. a callback awaiting disconnect()) must not block disconnect()
+        closeout_task = asyncio.create_task(
+            asyncio.wait(closeout, timeout=CLOSEOUT_TIMEOUT)
+        )
         while not closeout_task.done():
             with suppress(asyncio.CancelledError):
                 await asyncio.shield(closeout_task)
+
+        _, pending = closeout_task.result()
+        for task in pending:
+            _LOGGER.warning(
+                "closeout(%s): %r did not finish within %ss, cancelling it",
+                self.host,
+                task.get_coro(),
+                CLOSEOUT_TIMEOUT,
+            )
+            task.cancel()
 
     async def connect_handler(self, res: Future) -> None:
         """Handle connection for webOS TV."""
@@ -633,9 +649,10 @@ class WebOsClient:
 
         Do not await `disconnect()` from inside a callback. Connection
         teardown waits for running callbacks to finish, while `disconnect()`
-        waits for the teardown, so the two would deadlock. To disconnect in
-        response to a state change, schedule it as a separate task instead,
-        e.g. `asyncio.create_task(client.disconnect())`.
+        waits for the teardown, so the two wait for each other until the
+        teardown gives up after `CLOSEOUT_TIMEOUT` and cancels the callback.
+        To disconnect in response to a state change, schedule it as a
+        separate task instead, e.g. `asyncio.create_task(client.disconnect())`.
         """
         self.state_update_callbacks.append(callback)
         if self.do_state_update:
