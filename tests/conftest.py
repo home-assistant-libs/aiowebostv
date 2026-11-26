@@ -72,6 +72,8 @@ class FakeTv:
         self.port = 0
         self.hello_type = "hello"
         self.respond_to_hello = True
+        # Raw text sent instead of the hello response, "close" closes instead
+        self.hello_reply: str | None = None
         # "accept", "reject" or "no_key", used when the client key is not valid
         self.pairing = "accept"
         # Reject a signed manifest, like firmware with a blacklisted signature
@@ -143,7 +145,11 @@ class FakeTv:
     ) -> None:
         """Respond to a message from the client."""
         if data["type"] == "hello":
-            if self.respond_to_hello:
+            if self.hello_reply == "close":
+                await ws.close()
+            elif self.hello_reply is not None:
+                await ws.send_str(self.hello_reply)
+            elif self.respond_to_hello:
                 await ws.send_json(
                     {"type": self.hello_type, "id": "hello", "payload": {"x": 1}}
                 )
