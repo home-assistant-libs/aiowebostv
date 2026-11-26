@@ -966,6 +966,70 @@ async def test_failing_callback_does_not_stop_state_updates(
     assert "RuntimeError: boom" in caplog.text
 
 
+async def test_disconnect_with_hanging_callback(
+    client: WebOsClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test a state update callback that never finishes does not block disconnect."""
+    monkeypatch.setattr(webos_client, "CLOSEOUT_TIMEOUT", 0.1)
+    assert await client.connect()
+
+    cancelled = asyncio.Event()
+
+    async def hanging_callback(state: WebOsTvState) -> None:
+        if state.is_on:
+            return
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    await client.register_state_update_callback(hanging_callback)
+
+    await asyncio.wait_for(client.disconnect(), 1)
+
+    assert not client.is_connected()
+    await asyncio.wait_for(cancelled.wait(), 1)
+    assert "did not finish within 0.1s" in caplog.text
+    assert "_call_state_update_callbacks" in caplog.text
+
+
+async def test_callback_awaiting_disconnect(
+    connected_client: WebOsClient,
+    fake_tv: FakeTv,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test a state update callback awaiting disconnect() does not deadlock.
+
+    The teardown waits for the callback, which waits for the teardown, until
+    the teardown gives up after the closeout timeout.
+    """
+    monkeypatch.setattr(webos_client, "CLOSEOUT_TIMEOUT", 0.1)
+    client = connected_client
+    disconnected = asyncio.Event()
+
+    async def disconnect_when_off(state: WebOsTvState) -> None:
+        if not state.is_on:
+            await client.disconnect()
+            disconnected.set()
+
+    await client.register_state_update_callback(disconnect_when_off)
+    assert fake_tv.main_ws is not None
+    assert client.connect_task is not None
+
+    await fake_tv.main_ws.close()
+    # Cancelled by the callback's disconnect(), wait for it without its result
+    await asyncio.wait({client.connect_task}, timeout=1)
+
+    assert client.connect_task.done()
+    assert not client.is_connected()
+    await asyncio.wait_for(disconnected.wait(), 1)
+    assert "did not finish within 0.1s" in caplog.text
+
+
 @pytest.mark.parametrize(
     ("uri", "payload", "attribute", "expected"),
     [
